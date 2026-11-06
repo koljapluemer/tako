@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tako – IFC viewer</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1f22; }
+      #status {
+        position: fixed; top: 12px; left: 12px; padding: 6px 10px;
+        font: 13px/1.4 system-ui, sans-serif; color: #eee;
+        background: rgba(0, 0, 0, 0.55); border-radius: 6px; pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">Loading…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
