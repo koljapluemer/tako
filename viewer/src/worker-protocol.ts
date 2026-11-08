@@ -1,4 +1,5 @@
 import type { SerializedBVH } from 'three-mesh-bvh';
+import type { NavLevel, NavPoint } from './nav/points';
 
 export const PROTOCOL_VERSION = 1 as const;
 export type Rgba = [number, number, number, number];
@@ -46,7 +47,7 @@ export type LoadResult = {
 };
 
 /** `rangeIds` in `mesh` hold connected-component ranks; 0 is the largest walkable area. */
-export type NavBuild = { mesh: CollisionPart | null };
+export type NavBuild = { mesh: CollisionPart | null; points: NavPoint[]; levels: NavLevel[] };
 
 export type ElementInfo = {
   expressID: number;

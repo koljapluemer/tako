@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Collision, NavMesh } from './collision';
+import type { NavLevel, NavPoint } from './nav/points';
 import {
   PROTOCOL_VERSION,
   type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary,
@@ -17,6 +18,8 @@ export type LoadedModel = {
   /** Arrives after the model is live, and stays null if nothing walkable could be derived. */
   nav: NavMesh | null;
   navToken: number;
+  points: NavPoint[];
+  levels: NavLevel[];
   doors: DoorInfo[];
   doorCells: DoorCell[];
   storeys: StoreyInfo[];
@@ -126,6 +129,8 @@ function build(result: LoadResult): LoadedModel {
     collision: new Collision(result.floor, result.solid),
     nav: null,
     navToken: result.navToken,
+    points: [],
+    levels: [],
     doors,
     doorCells: [...cells.values()],
     storeys: result.storeys,
@@ -137,6 +142,8 @@ function build(result: LoadResult): LoadedModel {
 export async function loadNavigation(model: LoadedModel): Promise<void> {
   const { result } = await request<Extract<Reply, { type: 'navigated' }>>({ type: 'navigation', token: model.navToken });
   if (result.mesh) model.nav = new NavMesh(result.mesh);
+  model.points = result.points;
+  model.levels = result.levels;
 }
 
 export type OpenedDocument = { document: DocumentSummary; model: LoadedModel };

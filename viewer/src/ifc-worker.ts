@@ -3,9 +3,10 @@
 import { BufferAttribute, BufferGeometry, Matrix3, Matrix4, Vector3 } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { boundsOf, buildNavmesh, initNavmesh, type Bounds as NavBounds, type NavInput } from './nav/navmesh';
+import { generatePoints, type NavDoor, type NavLevel, type NavPoint, type NavSpace } from './nav/points';
 import { cellKey } from './render-cells';
 import {
-  IFCBUILDINGSTOREY, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
+  IFCBUILDINGSTOREY, IFCSPACE, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
   IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE,
   IFCREAL, IFCRELDEFINESBYPROPERTIES, IFCRELFILLSELEMENT, IFCSIUNIT, IFCSITE, IfcAPI,
 } from 'web-ifc';
@@ -14,8 +15,7 @@ import {
   commitProject, exportProject, importProject, listProjects, loadRevision, openProject, saveFocus,
   type HistoryEntry, type ProjectManifest,
 } from './project-store';
-import {  PROTOCOL_VERSION, type AgentQuery, type DocumentCommand, type NavBuild,
-} from './worker-protocol';
+import { PROTOCOL_VERSION, type AgentQuery, type DocumentCommand, type NavBuild } from './worker-protocol';
 import type {
   Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, Rgba, StoreyInfo,
   WorkerRequest, WorkerResponse,
@@ -193,19 +193,56 @@ function readStoreys(modelID: number, slabs: Map<number, Bounds>, stairs: Map<nu
 }
 
 // --- requests ---------------------------------------------------------------
-let navInput: NavInput | null = null;
+type PendingNavigation = NavInput & { doorInfo: NavDoor[]; spaces: NavSpace[]; storeys: StoreyInfo[] };
+/** web-ifc's mesh stream leaves spaces out, so they are meshed one by one. Spaces are optional enrichment. */
+function readSpaces(modelID: number): NavSpace[] {
+  const out: NavSpace[] = [];
+  const ids = api.GetLineIDsWithType(modelID, IFCSPACE);
+  for (let i = 0; i < ids.size(); i++) {
+    const id = ids.get(i);
+    try {
+      const line = api.GetLine(modelID, id);
+      const name = text(line.LongName) ?? text(line.Name);
+      if (!name) continue;
+      const placed = api.GetFlatMesh(modelID, id).geometries;
+      const baked: number[] = [];
+      for (let g = 0; g < placed.size(); g++) {
+        const geometry = api.GetGeometry(modelID, placed.get(g).geometryExpressID);
+        const verts = api.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+        const indices = api.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+        geometry.delete();
+        baked.push(...bake(verts, indices, Array.from(placed.get(g).flatTransformation), id).positions);
+      }
+      if (baked.length) out.push({ bounds: boundsOf(new Float32Array(baked)), name });
+    } catch {
+      // A broken space costs its name and nothing else.
+    }
+  }
+  return out;
+}
+
+let navInput: PendingNavigation | null = null;
 let navToken = 0;
+/** Per project, so points from another building never anchor this one. */
+let navPrevious: { project: string; points: NavPoint[] } | null = null;
+const noNavigation: NavBuild = { mesh: null, points: [], levels: [] as NavLevel[] };
 
 async function navigation(token: number): Promise<{ result: NavBuild; transfer: Transferable[] }> {
-  if (token !== navToken || !navInput) return { result: { mesh: null }, transfer: [] };
+  if (token !== navToken || !navInput) return { result: noNavigation, transfer: [] };
   const input = navInput;
   navInput = null;
   await initNavmesh();
   const built = buildNavmesh(input);
-  if (!built) return { result: { mesh: null }, transfer: [] };
+  if (!built) return { result: noNavigation, transfer: [] };
+  const project = manifest?.id ?? '';
+  const { points, levels } = generatePoints({
+    components: built.components, doors: input.doorInfo, spaces: input.spaces, storeys: input.storeys,
+    previous: navPrevious?.project === project ? navPrevious.points : [],
+  });
+  navPrevious = { project, points };
   const transfer = new Set<ArrayBuffer>();
   const chunks: Chunk[] = built.components.map(({ positions, indices }, rank) => ({ positions, indices, normals: new Float32Array(0), expressID: rank }));
-  return { result: { mesh: buildCollision(chunks, transfer) }, transfer: [...transfer] };
+  return { result: { mesh: buildCollision(chunks, transfer), points, levels }, transfer: [...transfer] };
 }
 
 async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ result: LoadResult; transfer: Transferable[] }> {
@@ -228,6 +265,7 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   const terrain = new Set<number>();
   const allBounds = new Map<number, Bounds>();
   const doorBounds: NavBounds[] = [];
+  const doorIds = new Set<number>();
   const furnitureBounds: NavBounds[] = [];
 
   api.StreamAllMeshes(modelID, (flatMesh) => {
@@ -248,7 +286,10 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
       const color: Rgba = [pg.color.x, pg.color.y, pg.color.z, pg.color.w];
 
       const cell = cellKey(chunk.positions);
-      if (door) doorBounds.push(boundsOf(chunk.positions));
+      if (door) {
+        doorBounds.push(boundsOf(chunk.positions));
+        doorIds.add(expressID);
+      }
       if (furniture) furnitureBounds.push(boundsOf(chunk.positions));
       if (door || standalone.has(expressID)) {
         single.push({ color, positions: chunk.positions, normals: chunk.normals, indices: chunk.indices, expressID, door, doorCell: door ? cell : null });
@@ -332,14 +373,23 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
 
   // A copy: some of these chunks' buffers are transferred to the main thread with the result.
   const { positions: navPositions, indices: navIndices } = concat([...floorChunks, ...solidChunks], false);
-  navInput = { positions: navPositions, indices: navIndices, doors: doorBounds, furniture: furnitureBounds };
+  const storeys = readStoreys(modelID, slabs, stairs);
+  navInput = {
+    positions: navPositions, indices: navIndices, doors: doorBounds, furniture: furnitureBounds, storeys,
+    spaces: readSpaces(modelID),
+    doorInfo: [...doorIds].map((id) => {
+      const fact = semanticFacts.get(id);
+      const { min, max } = allBounds.get(id)!;
+      return { bounds: { min: [min.x, min.y, min.z], max: [max.x, max.y, max.z] }, globalId: fact?.globalId ?? null, exterior: fact?.exterior ?? false };
+    }),
+  };
   navToken += 1;
 
   const result: LoadResult = {
     render,
     floor: buildCollision(floorChunks, transfer),
     solid: buildCollision(solidChunks, transfer),
-    storeys: readStoreys(modelID, slabs, stairs),
+    storeys,
     terrain: [...terrain],
     coordination: Array.from(api.GetCoordinationMatrix(modelID)),
     navToken,
@@ -800,7 +850,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       } else if (request.type === 'navigation') {
         const { result, transfer } = await navigation(request.token).catch((error) => {
           console.warn('navmesh generation failed', error);
-          return { result: { mesh: null }, transfer: [] };
+          return { result: noNavigation, transfer: [] };
         });
         post({ type: 'navigated', id: request.id, result }, transfer);
       } else if (request.type === 'inspect') {
