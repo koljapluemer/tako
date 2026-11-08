@@ -59,3 +59,7 @@ check: setup
 # Production build of the viewer
 build: setup
     cd viewer && npm run build
+
+# Deploy committed HEAD to the shared host (see doc/deployment.md)
+deploy:
+    bash deploy/deploy.sh

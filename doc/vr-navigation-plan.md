@@ -1,0 +1,205 @@
+# VR navigation plan
+
+Goal: make tako properly usable in VR on a **standalone Meta Quest, opened from
+Quest Browser**, with natural walking, teleport, high-level navigation points
+and quick switching between versions of a building.
+
+Status: proposed. Nothing here is implemented yet unless listed under "Already
+in place".
+
+## Decisions
+
+- **Target:** standalone Quest. PCVR/Link is not a target.
+- **Locomotion:** natural walking plus teleport. No joystick translation.
+- **Content on the headset:** for now, Quest users look at the demo models.
+  Demo versions ship as static files with the site.
+- **Desktop-to-headset sync is deferred.** Edits made through the desktop agent
+  do not reach the headset. See "Deferred".
+- **No wrist anchoring, tabs or flat multi-page menus.** A control opens an
+  object placed in the world; the arm is free afterwards.
+- **Generality:** analysis is geometry-first. Any IFC element, relationship or
+  property may be missing or wrong. IFC semantics only enrich the result.
+  `IfcSpace` in particular is
+  [often omitted](https://mdpi.com/1996-1073/15/8/2937) and
+  [often geometrically inaccurate](https://mdpi.com/2075-5309/13/2/350).
+- **The bundled samples are not design evidence.** Do not tune thresholds or
+  decide what can be relied on by inspecting them. Evaluate on the corpus in
+  step 1.
+
+## Already in place
+
+| Area | Where | State |
+|---|---|---|
+| Natural walking | `viewer/src/xr/walking.ts` | Head tracked 1:1, rig follows floor height, walls fade to black rather than pushing the user |
+| Teleport | `viewer/src/xr/teleport.ts` | Arc, landing validation, fade, hold or stick aiming, choice of facing |
+| Collision | `viewer/src/collision.ts` | BVH built in the worker, floor and solid parts |
+| Menu | `viewer/src/xr/menu.ts` | Storeys and sample buildings; replaced by this plan |
+| Position across revisions | `XRWalk.setModel` in `viewer/src/xr/session.ts` | Preserved, including origin shifts; lost when switching files |
+
+Known gaps:
+
+- Only the head is collision-checked, so railings, parapets and furniture below
+  head height can be walked through.
+- Teleport landings are checked locally, so unreachable spots are accepted.
+- Walkable surfaces come from a fixed IFC class list (`viewer/src/ifc-classes.ts`).
+- No controller or hand models are drawn.
+- History entries only have generated summaries, and the worker can only step
+  undo and redo.
+- Render batches are per colour across the whole building, so they cannot be
+  culled usefully. Each door is its own mesh.
+
+## Interaction design
+
+### Opening things
+
+- **Controllers:** two face buttons, one for the revision arc and one for the
+  mini model.
+- **Hands and other inputs without buttons:** the existing small body-locked
+  button, which opens a two-choice picker.
+- The pointer ray picks the direction only. Distance is clamped so objects stay
+  usable: 45-55 cm at about waist height for the mini model, 1-1.5 m for the
+  arc.
+- Both draw on top of the building, so a nearby wall cannot cut through them.
+
+### Revision arc
+
+- A short, gravity-aligned arc of cards, placed once and world-locked.
+- Each card shows a title and age, and the current version is marked. Long
+  histories scroll sideways.
+- Selecting a card fades, swaps and keeps position. The arc stays open for A/B
+  comparison, and closes on walking away or pressing the control again.
+- A final "Other buildings" entry replaces the old "Switch building" row.
+
+### Mini model (world-in-miniature)
+
+- About 50-60 cm on its longest side, gravity-aligned and world-locked, with a
+  "you are here" marker showing facing.
+- Built from the navmesh (floor plates and extruded wall outlines) as one cheap
+  merged mesh. It does not reuse the full building geometry.
+- Storeys are pulled apart vertically. The current storey is solid, others are
+  ghosted.
+- Only pins are selectable, never model geometry.
+
+| Input | Action |
+|---|---|
+| One-hand grab | Turntable spin around the vertical axis |
+| Two-hand grab | Move, zoom and turn around the midpoint of the hands |
+| Fingertip or controller tip | Touch a pin |
+| Ray | Fallback, snaps to the nearest pin |
+
+- Grab is `squeeze` on controllers and a pinch near the model with hands.
+  `session.ts` only listens for `select` today. Use `teleport.claim` so a grab
+  cannot start a teleport.
+- Pins are small buttons on stems above their floor. Contact highlights and
+  shows the name, pressing about 1 cm arms, lifting off commits, sliding off
+  sideways cancels.
+- Committing does the normal fade-teleport and closes the model. Position, spin
+  and zoom reset on next open.
+- Pin spacing is at least about 4 cm at default scale, to be tuned on a headset.
+  Lower-importance pins appear as the user zooms in.
+
+## Build order
+
+### 1. Headset baseline
+
+- In-VR readout of frame time, draw calls, triangles and memory.
+- Test corpus: varied real models, plus synthetic cases with no spaces, no
+  stairs, proxy floors, atriums, broken relationships and large file sizes.
+- Record budgets on a real Quest, following
+  [Meta's performance guidance](https://developers.meta.com/horizon/documentation/web/webxr-perf-bp/).
+
+Done when: we have measured budgets and a repeatable way to test against them.
+
+### 2. Rendering
+
+- Split colour batches by storey and spatial cell so frustum culling works.
+- Merge doors away from the user; only nearby doors need individual opacity.
+- Enable [multiview](https://discourse.threejs.org/t/oculus-multiview-extension-support-added-to-three-for-quest-performance/80202)
+  if it holds up in testing.
+
+Done when: large corpus models hold frame rate on the headset.
+
+### 3. Walkability
+
+- Generate a navmesh in the worker with
+  [recast-navigation-js](https://npmjs.com/package/recast-navigation), from
+  up-facing geometry. IFC classes only exclude things such as furniture.
+- Add floor patches at door thresholds, because slabs often stop at door
+  openings and rooms would otherwise be disconnected.
+- Keep the BVH for runtime collision.
+  [IWSDK's locomotor](https://cdn.jsdelivr.net/npm/@iwsdk/locomotor@0.4.2/README.md)
+  is thumbstick-capsule oriented and does not document room-scale head handling.
+- Reject teleport landings that are not on the reachable navmesh.
+- Add a body-height warning for low obstacles, in the same non-pushing style as
+  wall fades.
+
+Done when: walkability works on corpus models that have no usable class data.
+
+### 4. Navigation points
+
+Runs in the worker and is deterministic.
+
+1. **Candidates:** region centres (widest point of the distance field),
+   corridor junctions (branch points of the medial axis), stair and ramp ends,
+   door thresholds between regions.
+2. **Enrichment when present:** space names, external doors. Every point has a
+   generic fallback name.
+3. **Importance:** region size, candidate type and betweenness on the region
+   graph.
+4. **Spreading:** weighted greedy elimination. Take the highest score, remove
+   candidates within radius r, adjust r per storey to reach a target count.
+   Distances are **walking distances**, not straight-line. Entrances and stair
+   landings are always kept.
+5. **Stability:** anchor points to GlobalIds and matched regions, so they do not
+   jump between versions.
+6. **Arrival:** each point has a facing direction into its space.
+
+Done when: points are evenly spread and sensible across the corpus, including
+models with no `IfcSpace` at all.
+
+### 5. Versions
+
+- One version source interface with two implementations: a static manifest for
+  demo models (file and title per version), and project history for local
+  projects.
+- Add a real title field to history entries, and jump-to-revision in the worker.
+- Keep position across versions stored as separate files, using shared
+  coordinates or matching GlobalIds, with a safe fallback when neither exists.
+- If the spot no longer exists, go to the nearest walkable point.
+- Cancel stale loads instead of queueing them.
+- Cache processed geometry by content hash so A/B switching is instant. If
+  parsing on the headset is still too slow, precompute demo data at build time
+  and serve it statically.
+- Build the revision arc.
+
+Done when: A/B switching in the headset keeps position and feels immediate.
+
+### 6. Mini model
+
+Build the mesh, pins and interactions described above, and add hand and
+controller models.
+
+Done when: intended pins can be hit reliably with both hands and controllers.
+
+### 7. Finish
+
+- Request `bounded-floor`, [falling back to `local-floor`](https://developer.mozilla.org/docs/Web/API/WebXR_Device_API/Bounded_reference_spaces).
+- Spawn at an entrance when one can be identified.
+- Optional snap turn for seated use (rotation only).
+
+## Open questions
+
+- How much local storage does Quest Browser actually allow? (Step 1)
+- Does multiview work well with this three.js setup? (Steps 1-2)
+- How heavy is Recast's WASM on the headset? (Step 3)
+- The medial-axis, Recast partitioning and elimination details above have not
+  been validated against sources or prototyped yet.
+
+## Deferred
+
+**Desktop-to-headset sync.** Projects live in per-device browser storage and the
+agent bridge only accepts local origins, so desktop revisions cannot reach the
+headset. If this becomes necessary, the preferred option is uploading
+client-side encrypted revision bundles to a blob store behind Caddy, with the
+key in the URL fragment. Alternatives are direct WebRTC transfer and manual
+export and import.

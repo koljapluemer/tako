@@ -1,0 +1,18 @@
+# Runs on a host whose reverse proxy already owns ports 80/443; see doc/deployment.md.
+# Copied to the host by deploy/deploy.sh. The image is built locally and loaded there.
+name: tako
+
+services:
+  viewer:
+    image: tako-viewer:${TAKO_TAG:?set TAKO_TAG in .env}
+    restart: unless-stopped
+    mem_limit: 128m
+    networks:
+      proxy:
+        aliases:
+          - tako-viewer
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?set PROXY_NETWORK in .env}
