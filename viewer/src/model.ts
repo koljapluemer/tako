@@ -3,7 +3,7 @@ import { Collision, NavMesh } from './collision';
 import type { NavLevel, NavPoint } from './nav/points';
 import {
   PROTOCOL_VERSION,
-  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary,
+  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary, type RevisionInfo,
   type StoreyInfo, type WorkerRequest, type WorkerResponse,
 } from './worker-protocol';
 
@@ -20,6 +20,9 @@ export type LoadedModel = {
   navToken: number;
   points: NavPoint[];
   levels: NavLevel[];
+  navLoaded: boolean;
+  /** Approximate geometry size, for the cache budget. */
+  bytes: number;
   doors: DoorInfo[];
   doorCells: DoorCell[];
   storeys: StoreyInfo[];
@@ -131,6 +134,8 @@ function build(result: LoadResult): LoadedModel {
     navToken: result.navToken,
     points: [],
     levels: [],
+    navLoaded: false,
+    bytes: result.render.reduce((sum, part) => sum + part.positions.byteLength + part.normals.byteLength + part.indices.byteLength, 0),
     doors,
     doorCells: [...cells.values()],
     storeys: result.storeys,
@@ -140,6 +145,8 @@ function build(result: LoadResult): LoadedModel {
 }
 
 export async function loadNavigation(model: LoadedModel): Promise<void> {
+  if (model.navLoaded) return;
+  model.navLoaded = true;
   const { result } = await request<Extract<Reply, { type: 'navigated' }>>({ type: 'navigation', token: model.navToken });
   if (result.mesh) model.nav = new NavMesh(result.mesh);
   model.points = result.points;
@@ -174,10 +181,11 @@ export async function executeCommand(
   document: DocumentSummary,
   command: DocumentCommand,
   progress: (message: string) => void,
+  title?: string,
 ): Promise<OpenedDocument & { command: Extract<Reply, { type: 'executed' }>['command'] }> {
   onProgress = progress;
   const reply = await request<Extract<Reply, { type: 'executed' }>>({
-    type: 'execute', documentId: document.documentId, baseRevision: document.revision, command,
+    type: 'execute', documentId: document.documentId, baseRevision: document.revision, command, title,
   });
   workerDocument = reply.document;
   return { document: reply.document, model: build(reply.result), command: reply.command };
@@ -194,6 +202,24 @@ export async function changeRevision(
   });
   workerDocument = reply.document;
   return { document: reply.document, model: build(reply.result), command: reply.command };
+}
+
+export const listRevisions = async (): Promise<RevisionInfo[]> =>
+  (await request<Extract<Reply, { type: 'revisions' }>>({ type: 'listRevisions' })).revisions;
+
+/** Pass the revision's cached model as `reuse` to skip rebuilding its geometry. */
+export async function jumpToRevision(
+  document: DocumentSummary,
+  target: number,
+  reuse: LoadedModel | null,
+  progress: (message: string) => void,
+): Promise<OpenedDocument> {
+  onProgress = progress;
+  const reply = await request<Extract<Reply, { type: 'jumped' }>>({
+    type: 'jumpRevision', documentId: document.documentId, baseRevision: document.revision, target, reuse: reuse != null,
+  });
+  workerDocument = reply.document;
+  return { document: reply.document, model: reuse ?? build(reply.result!) };
 }
 
 export async function exportModel(): Promise<{ name: string; data: ArrayBuffer }> {

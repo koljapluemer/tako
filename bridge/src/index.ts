@@ -68,6 +68,8 @@ const tool = <S extends z.ZodRawShape>(name: string, description: string, schema
   server.tool(name, description, schema, (async (args: Record<string, unknown>) =>
     ok(await callBrowser(name, args))) as never);
 
+const title = z.string().max(60).optional().describe('Short name for this revision, shown in the VR revision list. Describe the design change, e.g. "Wider entrance door".');
+
 tool('model_overview', 'Schema, storeys, element counts and recent browser-local edit history.', {});
 tool('find_elements', 'Find candidates by IFC class and derived spatial facts. Inspect source fields before relying on inferred exterior/facing.', {
   ifc_class: z.string().optional(), storey: z.string().optional(), exterior: z.boolean().optional(),
@@ -83,23 +85,29 @@ tool('get_focus', 'Return the element selected in the browser and the latest edi
 tool('list_materials', 'List materials found on rendered products and their usage counts.', {});
 tool('set_name', 'Set the IFC Name of one or more elements as one atomic browser revision.', {
   elements: z.array(z.string()).min(1), name: z.string().min(1),
+  title,
 });
 tool('set_attribute', 'Set an existing simple IFC attribute. This cannot change relationships or geometry.', {
   elements: z.array(z.string()).min(1), attribute: z.string().min(1),
   value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  title,
 });
 tool('set_property', 'Set an existing single-value property. Refuses missing property sets rather than creating an invalid graph.', {
   element: z.string(), pset: z.string().min(1), name: z.string().min(1), value: z.union([z.string(), z.number(), z.boolean()]),
+  title,
 });
 tool('resize_door_or_window', 'Resize mapped door/window geometry and its host opening. Inputs are metres; only center anchoring is currently supported.', {
   element: z.string(), width: z.number().positive().optional(), height: z.number().positive().optional(),
   anchor: z.literal('center').default('center'),
+  title,
 });
 tool('move_elements', 'Move products by a metre offset in IFC x/y/z coordinates as one revision.', {
   elements: z.array(z.string()).min(1), x: z.number().default(0), y: z.number().default(0), z: z.number().default(0),
+  title,
 });
 tool('delete_elements', 'Delete elements and direct relationships. Requires the literal confirmation token CONFIRM_DELETE after user approval.', {
   elements: z.array(z.string()).min(1), confirmation_token: z.literal('CONFIRM_DELETE'),
+  title,
 });
 tool('undo', 'Move the browser project back one revision.', {});
 tool('redo', 'Move the browser project forward one revision.', {});

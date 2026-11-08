@@ -11,7 +11,7 @@ export function connectAgent(options: {
   changed: (opened: OpenedDocument, summary: string, ids: number[]) => Promise<void>;
   status: (message: string) => void;
   query: (query: AgentQuery) => Promise<unknown>;
-  execute: (document: DocumentSummary, command: DocumentCommand) => Promise<OpenedDocument & { command: CommandResult }>;
+  execute: (document: DocumentSummary, command: DocumentCommand, title?: string) => Promise<OpenedDocument & { command: CommandResult }>;
   revision: (action: 'undo' | 'redo', document: DocumentSummary) => Promise<OpenedDocument & { command: CommandResult }>;
 }): () => void {
   let stopped = false;
@@ -68,7 +68,7 @@ export function connectAgent(options: {
       } else {
         throw new Error(`unsupported browser tool ${request.name}`);
       }
-      const changed = await options.execute(document, command);
+      const changed = await options.execute(document, command, typeof request.args.title === 'string' ? request.args.title : undefined);
       await options.changed(changed, changed.command.summary, changed.command.changed);
       reply({ type: 'result', id: request.id, result: changed.command });
     } catch (error) {

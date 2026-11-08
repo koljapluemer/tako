@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { LoadedModel } from '../model';
 import type { Sample } from '../samples';
+import type { VersionSource } from '../versions';
+import { Arc } from './arc';
 import { Fade } from './fade';
 import { Hud } from './hud';
 import { Inspect } from './inspect';
@@ -27,6 +29,8 @@ function pointerVisual() {
 const head = new THREE.Vector3();
 const pivot = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
+const feet = new THREE.Vector3();
+const MAX_RESCUE_DISTANCE = 30;
 
 export class XRWalk {
   readonly rig = new THREE.Group();
@@ -35,6 +39,7 @@ export class XRWalk {
   private teleport: Teleport;
   private menu: Menu;
   private inspect: Inspect;
+  private arc: Arc;
   private hud: Hud | null;
   private pointers: Pointer[] = [];
   private model: LoadedModel | null = null;
@@ -59,12 +64,13 @@ export class XRWalk {
     this.teleport = new Teleport(scene, camera, () => this.walking.floorY);
     this.menu = new Menu(scene, camera);
     this.inspect = new Inspect(scene, camera);
+    this.arc = new Arc(scene, camera);
     this.menu.show(false);
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
 
     this.teleport.claim = (pointer) => {
       const ray = pointerRay(pointer, new THREE.Ray());
-      return this.menu.press(ray) || this.inspect.press(ray);
+      return this.arc.press(ray) || this.menu.press(ray) || this.inspect.press(ray);
     };
     this.teleport.tap = (pointer) => void this.inspect.tap(pointerRay(pointer, new THREE.Ray()));
     this.teleport.commit = (destination, pointer) => void this.travel(destination, pointer);
@@ -135,6 +141,7 @@ export class XRWalk {
     this.teleport.locked = false;
     this.walking.restoreDoors();
     this.menu.show(false);
+    this.arc.close();
     this.inspect.close();
     this.rig.position.set(0, 0, 0);
     this.rig.rotation.set(0, 0, 0);
@@ -155,6 +162,11 @@ export class XRWalk {
   setSamples(samples: Sample[], open: (sample: Sample) => void) {
     this.menu.setSamples(samples);
     this.menu.onSample = open;
+    this.arc.setSamples(samples, open);
+  }
+
+  setVersions(source: VersionSource) {
+    this.arc.source = source;
   }
 
   /** The DOM status line can't be seen from inside the headset. */
@@ -212,9 +224,15 @@ export class XRWalk {
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
     this.spawn = spawnLanding(landings);
     this.menu.setLandings(landings);
+    if (model.nav) this.setNavigation(model); // a cached revision already has one
 
     if (!this.presenting) return;
-    if (switched) this.modelChangedInSession = true;
+    if (switched) {
+      this.modelChangedInSession = true;
+      this.arc.close();
+    } else {
+      this.arc.refresh();
+    }
     if (this.needsPlacement) return; // update() places the user once the headset pose is live
     if (switched || !before) return this.placeAtSpawn();
 
@@ -263,6 +281,9 @@ export class XRWalk {
     const standing = (x: number, y: number, z: number) => walking.floorAt(x, z, y);
     const y = standing(head.x, walking.floorY, head.z);
     if (y != null && model.collision.distanceTo(head, 0.05) >= 0.05) return walking.resetTracking(y);
+    feet.set(head.x, walking.floorY, head.z);
+    const nearest = model.nav?.nearest(feet, MAX_RESCUE_DISTANCE);
+    if (nearest) return this.placeHead(nearest, null);
     const last = walking.lastValid;
     const fallbackY = last && standing(last.x, last.y, last.z);
     if (last && fallbackY != null) {
@@ -289,6 +310,7 @@ export class XRWalk {
     this.teleport.update(this.pointers);
     const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => pointerRay(p, new THREE.Ray()));
     this.menu.update(dt, rays);
+    this.arc.update(rays);
     this.hud?.update(now);
     this.fade.update(now);
   }

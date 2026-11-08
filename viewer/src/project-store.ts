@@ -10,6 +10,9 @@ export type HistoryEntry = {
   commandId: string;
   revision: number;
   summary: string;
+  /** Absent on entries written before titles and ages existed. */
+  title?: string;
+  createdAt?: string;
   changed: number[];
   command: unknown;
 };

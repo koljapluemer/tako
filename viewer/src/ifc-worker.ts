@@ -17,7 +17,7 @@ import {
 } from './project-store';
 import { PROTOCOL_VERSION, type AgentQuery, type DocumentCommand, type NavBuild } from './worker-protocol';
 import type {
-  Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, Rgba, StoreyInfo,
+  Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, RevisionInfo, Rgba, StoreyInfo,
   WorkerRequest, WorkerResponse,
 } from './worker-protocol';
 
@@ -221,6 +221,9 @@ function readSpaces(modelID: number): NavSpace[] {
   return out;
 }
 
+/** A revision the viewer is showing from its cache; parsed only once something needs the IFC itself. */
+let deferred: Uint8Array | null = null;
+
 let navInput: PendingNavigation | null = null;
 let navToken = 0;
 /** Per project, so points from another building never anchor this one. */
@@ -247,6 +250,7 @@ async function navigation(token: number): Promise<{ result: NavBuild; transfer: 
 
 async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ result: LoadResult; transfer: Transferable[] }> {
   await ready;
+  deferred = null;
   if (openModel != null) api.CloseModel(openModel);
   openModel = null;
 
@@ -772,7 +776,7 @@ function applyCommand(command: DocumentCommand): { changed: number[]; summary: s
   };
 }
 
-async function execute(command: DocumentCommand, standalone: number[] = []) {
+async function execute(command: DocumentCommand, standalone: number[] = [], title?: string) {
   const current = requireDocument();
   if (openModel == null) throw new Error('no project is open');
   const before = api.SaveModel(openModel);
@@ -791,7 +795,7 @@ async function execute(command: DocumentCommand, standalone: number[] = []) {
     current.updatedAt = new Date().toISOString();
     const commandId = crypto.randomUUID();
     history = history.slice(0, current.cursor - 1);
-    history.push({ commandId, revision: current.revision, summary: applied.summary, changed: applied.changed, command });
+    history.push({ commandId, revision: current.revision, summary: applied.summary, title, createdAt: current.updatedAt, changed: applied.changed, command });
     phase = 'persist candidate';
     await commitProject(current, history, saved);
     phase = 'rebuild geometry';
@@ -814,6 +818,30 @@ async function render(standalone: number[]) {
   api.CloseModel(openModel);
   openModel = null;
   return openData(saved, standalone);
+}
+
+function revisions(): RevisionInfo[] {
+  const current = requireDocument();
+  return [
+    { revision: 0, title: 'Original', createdAt: null, current: current.cursor === 0 },
+    ...history.map((entry, i) => ({
+      revision: i + 1, title: entry.title ?? entry.summary, createdAt: entry.createdAt ?? null, current: current.cursor === i + 1,
+    })),
+  ];
+}
+
+async function moveToRevision(current: ProjectManifest, target: number, parse: boolean) {
+  const data = await loadRevision(current.id, target);
+  current.revision = target;
+  current.cursor = target;
+  current.updatedAt = new Date().toISOString();
+  const opened = parse ? await openData(data, []) : null;
+  await commitProject(current, history, data);
+  return { data, opened };
+}
+
+async function ensureOpen() {
+  if (deferred) await openData(deferred, []);
 }
 
 function post(message: WorkerResponse, transfer: Transferable[] = []) {
@@ -845,6 +873,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         const opened = await openData(project.data, request.standalone);
         post({ type: 'opened', id: request.id, document: document(), result: opened.result }, opened.transfer);
       } else if (request.type === 'render') {
+        await ensureOpen();
         const rendered = await render(request.standalone);
         post({ type: 'rendered', id: request.id, document: document(), result: rendered.result }, rendered.transfer);
       } else if (request.type === 'navigation') {
@@ -854,8 +883,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         });
         post({ type: 'navigated', id: request.id, result }, transfer);
       } else if (request.type === 'inspect') {
+        await ensureOpen();
         post({ type: 'inspected', id: request.id, info: await inspect(request.expressID) });
       } else if (request.type === 'query') {
+        await ensureOpen();
         post({ type: 'queried', id: request.id, result: await queryAgent(request.query) });
       } else if (request.type === 'select') {
         await saveFocus(requireDocument(), request.expressID);
@@ -866,20 +897,24 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         post({ type: 'exported', id: request.id, name: current.name, data: data.buffer as ArrayBuffer }, [data.buffer as ArrayBuffer]);
       } else if (request.type === 'execute') {
         requireDocument(request.documentId, request.baseRevision);
-        const executed = await execute(request.command);
+        await ensureOpen();
+        const executed = await execute(request.command, [], request.title);
         post({
           type: 'executed', id: request.id, document: document(), command: executed.command, result: executed.rendered.result,
         }, executed.rendered.transfer);
+      } else if (request.type === 'listRevisions') {
+        post({ type: 'revisions', id: request.id, revisions: revisions() });
+      } else if (request.type === 'jumpRevision') {
+        const current = requireDocument(request.documentId, request.baseRevision);
+        if (request.target < 0 || request.target > history.length) throw new Error(`no revision ${request.target}`);
+        const { data, opened } = await moveToRevision(current, request.target, !request.reuse);
+        if (!opened) deferred = data;
+        post({ type: 'jumped', id: request.id, document: document(), result: opened?.result ?? null }, opened?.transfer ?? []);
       } else if (request.type === 'undo' || request.type === 'redo') {
         const current = requireDocument(request.documentId, request.baseRevision);
         const next = request.type === 'undo' ? current.revision - 1 : current.revision + 1;
         if (next < 0 || next > history.length) throw new Error(`nothing to ${request.type}`);
-        const data = await loadRevision(current.id, next);
-        current.revision = next;
-        current.cursor = next;
-        current.updatedAt = new Date().toISOString();
-        const opened = await openData(data, []);
-        await commitProject(current, history, data);
+        const { opened } = await moveToRevision(current, next, true) as { opened: Awaited<ReturnType<typeof openData>> };
         const entry = request.type === 'undo' ? history[next] : history[next - 1];
         post({
           type: 'executed', id: request.id, document: document(),

@@ -82,6 +82,8 @@ export type DocumentCommand =
   | { kind: 'moveElements'; targets: CommandTarget[]; params: { x: number; y: number; z: number } }
   | { kind: 'deleteElements'; targets: CommandTarget[]; params: { confirmationToken: string } };
 
+export type RevisionInfo = { revision: number; title: string; createdAt: string | null; current: boolean };
+
 export type CommandResult = {
   ok: true;
   commandId: string;
@@ -110,10 +112,13 @@ export type WorkerRequest =
   | (RequestBase & { type: 'query'; query: AgentQuery })
   | (RequestBase & { type: 'select'; expressID: number | null })
   | (RequestBase & { type: 'exportProject' })
-  | (RequestBase & { type: 'execute'; documentId: string; baseRevision: number; command: DocumentCommand })
+  | (RequestBase & { type: 'execute'; documentId: string; baseRevision: number; command: DocumentCommand; title?: string })
   | (RequestBase & { type: 'undo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'redo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'navigation'; token: number })
+  | (RequestBase & { type: 'listRevisions' })
+  /** `reuse`: the viewer still holds this revision's geometry, so don't send it again. */
+  | (RequestBase & { type: 'jumpRevision'; documentId: string; baseRevision: number; target: number; reuse: boolean })
   | (RequestBase & { type: 'cancel'; requestId: number });
 
 export type WorkerResponse =
@@ -127,4 +132,6 @@ export type WorkerResponse =
   | { type: 'exported'; id: number; name: string; data: ArrayBuffer }
   | { type: 'executed'; id: number; document: DocumentSummary; command: CommandResult; result: LoadResult }
   | { type: 'navigated'; id: number; result: NavBuild }
+  | { type: 'revisions'; id: number; revisions: RevisionInfo[] }
+  | { type: 'jumped'; id: number; document: DocumentSummary; result: LoadResult | null }
   | { type: 'error'; id: number; code: string; message: string };

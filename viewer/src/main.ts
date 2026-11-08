@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  changeRevision, exportModel, importProject, inspectElement, listProjects, loadNavigation, openProject, selectElement,
+  changeRevision, exportModel, importProject, inspectElement, jumpToRevision, listProjects, listRevisions, loadNavigation, openProject, selectElement,
   executeCommand, queryDocument, type LoadedModel, type OpenedDocument,
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
 import { addCorpusSamples, fetchSample, sampleFileName, SAMPLES, type Sample } from './samples';
+import { ModelCache, type VersionSource } from './versions';
 import { XRWalk } from './xr/session';
 
 const statusEl = document.getElementById('status')!;
@@ -85,6 +86,8 @@ function disposeModel({ group, collision, nav }: LoadedModel) {
   nav?.dispose();
 }
 
+const modelCache = new ModelCache(disposeModel);
+
 function highlight(model: THREE.Group, ids: number[]) {
   const set = new Set(ids);
   const hits: THREE.Mesh[] = [];
@@ -112,7 +115,10 @@ function highlight(model: THREE.Group, ids: number[]) {
 async function addNavigation(model: LoadedModel) {
   await loadNavigation(model).catch(console.warn);
   if (current === model) xr.setNavigation(model);
-  else model.nav?.dispose();
+  else if (!modelCache.holds(model)) {
+    model.nav?.dispose();
+    model.nav = null;
+  }
 }
 
 function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boolean) {
@@ -130,9 +136,10 @@ function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boo
         xr.setModel(model, refocus);
         if (previous) {
           scene.remove(previous.group);
-          disposeModel(previous);
+          if (!modelCache.holds(previous)) disposeModel(previous);
         }
       });
+      modelCache.put(document.id, document.revision, model, model);
       if (refocus) selectionMarker.visible = false;
       if (refocus && !xr.presenting) frameObject(model.group);
       if (change && change.changed.length) highlight(model.group, change.changed);
@@ -287,6 +294,41 @@ async function historyAction(action: 'undo' | 'redo') {
   await refreshPicker();
 }
 
+// --- revision switching ------------------------------------------------------
+// Latest wins: a selection made during a load replaces any waiting one, so rapid A/B doesn't queue up.
+let wantedRevision: number | null = null;
+let jumping = false;
+
+async function performJump(target: number) {
+  if (!activeDocument) return;
+  const cached = modelCache.get(activeDocument.id, target);
+  if (!cached) xr.notify('Loading revision…', true);
+  const opened = jumpToRevision(activeDocument, target, cached, setStatus);
+  show(opened, null, false);
+  const failed = await opened.then(() => false, () => true);
+  await loading;
+  if (failed) xr.notify('Could not load that revision', false);
+}
+
+async function requestRevision(target: number) {
+  wantedRevision = target;
+  if (jumping) return;
+  jumping = true;
+  while (wantedRevision != null) {
+    const next = wantedRevision;
+    wantedRevision = null;
+    if (next !== activeDocument?.revision) await performJump(next);
+  }
+  jumping = false;
+  await refreshPicker();
+}
+
+const versions: VersionSource = {
+  list: async () => (await listRevisions()).map(({ revision, title, createdAt, current: isCurrent }) => ({ id: revision, title, createdAt, current: isCurrent })),
+  select: (version) => void requestRevision(version.id),
+};
+xr.setVersions(versions);
+
 undoButton.addEventListener('click', () => void historyAction('undo'));
 redoButton.addEventListener('click', () => void historyAction('redo'));
 
@@ -305,7 +347,11 @@ agentWindow.__takoAgentDisconnect = connectAgent({
   document: () => activeDocument,
   status: setStatus,
   query: queryDocument,
-  execute: (document, command) => executeCommand(document, command, setStatus),
+  execute: async (document, command, title) => {
+    const executed = await executeCommand(document, command, setStatus, title);
+    modelCache.dropAfter(document.id, executed.document.revision, current);
+    return executed;
+  },
   revision: (action, document) => changeRevision(action, document, setStatus),
   changed: async (opened, summary, ids) => {
     show(Promise.resolve(opened), { rev: opened.document.revision, summary, changed: ids }, false);
