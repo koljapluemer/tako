@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { Collision } from './collision';
-import type { ElementInfo, LoadResult, StoreyInfo, WorkerRequest, WorkerResponse } from './worker-protocol';
+import {
+  PROTOCOL_VERSION,
+  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary,
+  type StoreyInfo, type WorkerRequest, type WorkerResponse,
+} from './worker-protocol';
 
 export type DoorInfo = { mesh: THREE.Mesh; box: THREE.Box3; material: THREE.MeshLambertMaterial; baseOpacity: number };
 
@@ -15,10 +19,14 @@ export type LoadedModel = {
 
 const worker = new Worker(new URL('./ifc-worker.ts', import.meta.url), { type: 'module' });
 
-type Pending = { resolve: (value: never) => void; reject: (err: Error) => void };
+type Reply = Exclude<WorkerResponse, { type: 'progress' }>;
+type Pending = { resolve: (value: Reply) => void; reject: (err: Error) => void };
 const pending = new Map<number, Pending>();
 let nextId = 1;
 let onProgress: (message: string) => void = () => {};
+let workerDocument: DocumentSummary | null = null;
+
+export const currentDocument = () => workerDocument;
 
 worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
   const msg = event.data;
@@ -26,20 +34,29 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);
-  if (msg.type === 'error') p.reject(new Error(msg.message));
-  else if (msg.type === 'loaded') p.resolve(msg.result as never);
-  else p.resolve(msg.info as never);
+  if (msg.type === 'error') p.reject(Object.assign(new Error(msg.message), { code: msg.code }));
+  else p.resolve(msg);
 };
 
-function request<T>(message: Omit<WorkerRequest & { id: number }, 'id'> & Record<string, unknown>): Promise<T> {
+type RequestPayload = WorkerRequest extends infer R
+  ? R extends WorkerRequest ? Omit<R, 'id' | 'protocolVersion'> : never
+  : never;
+
+function request<T extends Reply>(message: RequestPayload): Promise<T> {
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
-    pending.set(id, { resolve: resolve as Pending['resolve'], reject });
-    worker.postMessage({ ...message, id });
+    pending.set(id, { resolve: resolve as unknown as Pending['resolve'], reject });
+    const outgoing = { ...message, id, protocolVersion: PROTOCOL_VERSION } as WorkerRequest;
+    const transfer = outgoing.type === 'importProject' ? [outgoing.data] : [];
+    worker.postMessage(outgoing, transfer);
   });
 }
 
-export const inspectElement = (expressID: number) => request<ElementInfo | null>({ type: 'inspect', expressID });
+export const inspectElement = async (expressID: number) =>
+  (await request<Extract<Reply, { type: 'inspected' }>>({ type: 'inspect', expressID })).info;
+
+export const queryDocument = async (query: AgentQuery): Promise<unknown> =>
+  (await request<Extract<Reply, { type: 'queried' }>>({ type: 'query', query })).result;
 
 function build(result: LoadResult): LoadedModel {
   const group = new THREE.Group();
@@ -91,8 +108,57 @@ function build(result: LoadResult): LoadedModel {
   };
 }
 
-/** `standalone`: elements to keep as individual meshes, so they can be highlighted. */
-export async function loadModel(url: string, standalone: number[], progress: (message: string) => void): Promise<LoadedModel> {
+export type OpenedDocument = { document: DocumentSummary; model: LoadedModel };
+
+export const listProjects = async (): Promise<ProjectSummary[]> =>
+  (await request<Extract<Reply, { type: 'projects' }>>({ type: 'listProjects' })).projects;
+
+export async function importProject(file: File, progress: (message: string) => void): Promise<OpenedDocument> {
   onProgress = progress;
-  return build(await request<LoadResult>({ type: 'load', url, standalone }));
+  const data = await file.arrayBuffer();
+  const reply = await request<Extract<Reply, { type: 'opened' }>>({ type: 'importProject', name: file.name, data });
+  workerDocument = reply.document;
+  return { document: reply.document, model: build(reply.result) };
+}
+
+export async function openProject(projectId: string, standalone: number[], progress: (message: string) => void): Promise<OpenedDocument> {
+  onProgress = progress;
+  const reply = await request<Extract<Reply, { type: 'opened' }>>({ type: 'openProject', projectId, standalone });
+  workerDocument = reply.document;
+  return { document: reply.document, model: build(reply.result) };
+}
+
+export const selectElement = async (expressID: number | null): Promise<void> => {
+  await request<Extract<Reply, { type: 'selected' }>>({ type: 'select', expressID });
+};
+
+export async function executeCommand(
+  document: DocumentSummary,
+  command: DocumentCommand,
+  progress: (message: string) => void,
+): Promise<OpenedDocument & { command: Extract<Reply, { type: 'executed' }>['command'] }> {
+  onProgress = progress;
+  const reply = await request<Extract<Reply, { type: 'executed' }>>({
+    type: 'execute', documentId: document.documentId, baseRevision: document.revision, command,
+  });
+  workerDocument = reply.document;
+  return { document: reply.document, model: build(reply.result), command: reply.command };
+}
+
+export async function changeRevision(
+  action: 'undo' | 'redo',
+  document: DocumentSummary,
+  progress: (message: string) => void,
+): Promise<OpenedDocument & { command: Extract<Reply, { type: 'executed' }>['command'] }> {
+  onProgress = progress;
+  const reply = await request<Extract<Reply, { type: 'executed' }>>({
+    type: action, documentId: document.documentId, baseRevision: document.revision,
+  });
+  workerDocument = reply.document;
+  return { document: reply.document, model: build(reply.result), command: reply.command };
+}
+
+export async function exportModel(): Promise<{ name: string; data: ArrayBuffer }> {
+  const reply = await request<Extract<Reply, { type: 'exported' }>>({ type: 'exportProject' });
+  return { name: reply.name, data: reply.data };
 }

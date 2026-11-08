@@ -1,54 +1,55 @@
 # How it works
 
-- **The viewer and the server share the selected model** through
-  `work/selected.json`. Picking a model in the viewer makes the server switch to
-  it on its next tool call, and `open_model` on the server side moves the viewer.
-- **References are resolved from data, not names.** Element names are tool- and
-  language-specific (`Wand-002`, `Tür-019`), so `find_elements` uses derived
-  facts instead (`spatial.py`):
-  - *exterior* comes from `Pset_*Common.IsExternal`, then space boundaries, then
-    the host wall, then a 2D ray test against the other walls.
-  - *facing* is the outward normal of a PCA footprint, measured against `TrueNorth`
-    (or +Y when the file has none).
-  - Every fact reports its source, so Claude can say when it guessed.
-- **Edits never mutate shared data** (`edits.py`):
-  - Layer sets that other elements also use are copied before they are changed.
-  - Doors and windows are resized by wrapping the existing body (and the
-    opening's body) in an `IfcMappedItem` with a non-uniform scale. Shared type
-    geometry stays untouched, and this works for Breps, extrusions or mapped type
-    geometry alike.
-  - The clearance check refuses a resize that would overlap other openings or
-    run past the end of the wall.
-- **Units:** all tool inputs and outputs are in metres. Model units are converted
-  at the boundary, so millimetre files work too.
-- **Revisions:** every edit is written as a numbered revision under
-  `work/<model>/revisions/`, which is what makes `undo` possible.
-  `run_ifcopenshell` is an escape hatch for edits no dedicated tool covers.
+## Document ownership
 
-## Edits and follow-ups
+The IFC model has one owner: `viewer/src/ifc-worker.ts`. The worker keeps the
+`web-ifc` model open, extracts render and collision geometry, builds semantic
+facts, applies commands, serializes revisions, and stores projects in OPFS. The
+main thread and the MCP bridge cannot mutate IFC entities directly.
 
-- **Recipes:** `add_window`, `add_door`, `set_window_panels`, `set_material`, `resize_door_or_window` and `set_property` are named recipes (`server/src/tako_ifc_mcp/recipes.py`). Each records its parameters and targets in `history.json`.
-- **`revise_edit`** re-applies the latest edit from the revision before it, with changed parameters. It replaces that revision, so one `undo` still removes the whole edit. Older edits can't be revised yet.
-- **Scripts** (`run_ifcopenshell`) are saved under `work/<model>/edits/`. Values read from `PARAMS` can be changed with `revise_edit`, as can exact text snippets.
-- **The kit** (`kit.py`) has tested building blocks in metres for scripts. `kit_help` lists them and the worked examples in `kit_examples/`, which also run as tests.
-- **`verify`** runs before each commit: geometry exists, doors and windows fill an opening in a host, and nothing overlaps. Recipes refuse a failing geometric edit unless forced. Scripts report the problems.
-- **`context_around`** summarises a room or element and its surroundings in one call.
-- **`get_focus`** returns the element clicked in the viewer (`work/<model>/selection.json`) and the latest edit, so "this" needs no search.
+An imported project contains its immutable source, current IFC, manifest,
+history metadata, and revision snapshots. The manifest is written last so an
+interrupted import is not presented as a project. Each edit is serialized and
+reopened before it becomes durable. Failed commands reopen the pre-edit bytes.
 
-## Tested on
+Selection is browser-local. `get_focus` reads the selected express ID and latest
+command from the open project, so “this” stays tied to the visible document.
 
-| Model | Tool / schema | Exterior signal |
-|---|---|---|
-| `AC20-Institute-Var-2.ifc` | ArchiCAD 20, IFC4 | space boundaries |
-| `external/s-office-archi.ifc` | ArchiCAD 24, IFC2X3, millimetres | pset |
-| `external/bsi-arch-ifc2x3.ifc`, `external/bsi-arch-ifc4x3.ifc` | SketchUp, IFC2X3 / IFC4X3 | geometry |
+## Agent access
 
-Sources of the external files: [buildingSMART Sample-Test-Files](https://github.com/buildingSMART/Sample-Test-Files)
-(Simple-Scene/Building-Architecture) and [ThatOpen engine_web-ifc test files](https://github.com/ThatOpen/engine_web-ifc/tree/main/tests/ifcfiles/public).
+`bridge/` is a Node/TypeScript MCP server over stdio. It listens only on
+`127.0.0.1:47831`, accepts localhost browser origins, and forwards requests to
+one active tab. It never opens, stores, or validates an IFC file.
 
-## Known limits
+The browser exposes model overview, semantic search, element inspection,
+nearby context, materials, focus, simple IFC attributes and properties,
+placement-aware move, relationship-aware deletion, mapped door/window
+resize, and undo/redo. Unsupported representation shapes are refused without
+committing; there is no arbitrary-code escape hatch.
 
-- 2D plan representations and space-boundary geometry are not updated after a resize.
-- Profile-set materials (beams and columns) are not supported by `set_material` yet.
-- Geometry in the index only covers envelope-relevant classes (walls, doors,
-  windows, slabs and the like), so furniture has no facing information.
+All agent-facing lengths are metres. IFC unit conversion happens at the worker
+boundary. Spatial facts include provenance; exterior and facing currently use
+the tessellated building envelope and are labelled as geometric inference.
+
+## Rendering and XR
+
+Parsing and geometry generation remain off the UI thread. Successful edits
+currently rebuild the complete render/collision result and swap it into the
+scene, preserving the XR session position.
+
+Standalone WebXR supports viewing, walking, teleporting and inspecting local
+projects. The developer’s desktop browser is the authoritative agentic session
+for this proof of concept.
+
+## Current limits
+
+- OPFS belongs to an origin and browser profile; export before clearing site
+  data or changing the deployment origin.
+- Projects are single-user and single-device. There is no hosted sync or
+  cross-device agent rendezvous.
+- Door/window resizing requires a mapped body representation and center
+  anchoring. Unsupported geometry is rejected atomically.
+- Setting properties updates existing single-value properties; creating a new
+  property-set graph is not implemented yet.
+- Operations cover the safe proof-of-concept core rather than structural, MEP,
+  regulatory, or specialist-analysis authoring.

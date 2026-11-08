@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { inspectElement, loadModel, type LoadedModel } from './model';
+import {
+  changeRevision, exportModel, importProject, inspectElement, listProjects, openProject, selectElement,
+  executeCommand, queryDocument, type LoadedModel, type OpenedDocument,
+} from './model';
+import type { DocumentSummary } from './worker-protocol';
+import { connectAgent } from './agent-client';
 import { XRWalk } from './xr/session';
 
 const statusEl = document.getElementById('status')!;
@@ -62,6 +67,7 @@ const highlightMat = new THREE.MeshLambertMaterial({
   color: 0xff8a1f, emissive: 0x7a3300, side: THREE.DoubleSide,
 });
 let current: LoadedModel | null = null;
+let activeDocument: DocumentSummary | null = null;
 let loading = Promise.resolve();
 
 function disposeModel({ group, collision }: LoadedModel) {
@@ -101,17 +107,18 @@ function highlight(model: THREE.Group, ids: number[]) {
   tick();
 }
 
-function reload(change: ModelChange, refocus: boolean) {
+function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boolean) {
   // Serialise loads so rapid edits don't race.
   loading = loading.then(async () => {
     setStatus(change ? `Loading rev ${change.rev}…` : 'Loading…');
     try {
-      const model = await loadModel('/model.ifc', change?.changed ?? [], setStatus);
+      const { model, document } = await opened;
       await xr.swap(() => {
         const previous = current;
         scene.add(model.group);
         model.group.updateMatrixWorld(true);
         current = model;
+        activeDocument = document;
         xr.setModel(model, refocus);
         if (previous) {
           scene.remove(previous.group);
@@ -122,7 +129,7 @@ function reload(change: ModelChange, refocus: boolean) {
       if (refocus && !xr.presenting) frameObject(model.group);
       if (change && change.changed.length) highlight(model.group, change.changed);
       const summary = change && change.summary.length > 140 ? `${change.summary.slice(0, 140)}…` : change?.summary;
-      const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${model.group.children.length} draw groups`;
+      const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${document.name}: ${model.group.children.length} draw groups`;
       setStatus(model.collision.hasFloor ? label : `${label}. No floor elements found, so VR teleport is unavailable`);
     } catch (err) {
       console.error(err);
@@ -158,21 +165,17 @@ function pick(event: PointerEvent, model: LoadedModel) {
   return hit && { point: hit.point, expressID: hit.expressID };
 }
 
-function postSelection(expressID: number | null) {
-  return fetch('/select-element', { method: 'POST', body: JSON.stringify({ expressID }) });
-}
-
 async function select(event: PointerEvent) {
   if (!current || xr.presenting) return;
   const picked = pick(event, current);
   selectionMarker.visible = picked != null;
   if (!picked) {
-    await postSelection(null);
+    await selectElement(null);
     setStatus('Selection cleared');
     return;
   }
   selectionMarker.position.copy(picked.point);
-  await postSelection(picked.expressID);
+  await selectElement(picked.expressID);
   const info = await inspectElement(picked.expressID).catch(() => null);
   setStatus(`Selected #${picked.expressID}${info ? `: ${info.ifcClass} ${info.name ?? ''}` : ''}`);
 }
@@ -185,45 +188,89 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   pressedAt = null;
 });
 
-// --- model picker -----------------------------------------------------------
+// --- local projects ---------------------------------------------------------
 const picker = document.getElementById('model') as HTMLSelectElement;
+const importButton = document.getElementById('import') as HTMLButtonElement;
+const exportButton = document.getElementById('export') as HTMLButtonElement;
+const undoButton = document.getElementById('undo') as HTMLButtonElement;
+const redoButton = document.getElementById('redo') as HTMLButtonElement;
+const fileInput = document.getElementById('ifc-file') as HTMLInputElement;
 
 async function refreshPicker() {
-  const { selected, models } = (await (await fetch('/models.json', { cache: 'no-store' })).json()) as {
-    selected: string;
-    models: string[];
-  };
+  const projects = await listProjects();
   picker.replaceChildren(
-    ...models.map((m) => new Option(m.replace(/^example_data\//, ''), m, false, m === selected)),
+    ...projects.map((p) => new Option(`${p.name} · rev ${p.revision}`, p.id, false, p.id === activeDocument?.id)),
   );
-  return selected;
+  return projects;
 }
 
-picker.addEventListener('change', () => {
+picker.addEventListener('change', async () => {
   picker.disabled = true;
-  fetch('/select-model', { method: 'POST', body: JSON.stringify({ model: picker.value }) })
-    .finally(() => (picker.disabled = false));
-  // The server's file watcher answers with a tako:model event that triggers the load.
+  show(openProject(picker.value, [], setStatus), null, true);
+  await loading;
+  picker.disabled = false;
 });
 
-refreshPicker()
-  .then(() => fetch('/model-change.json', { cache: 'no-store' }))
-  .then((r) => r.json() as Promise<ModelChange>)
-  .catch(() => null)
-  .then((change) => reload(change && { ...change, changed: [] }, true));
+importButton.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files?.[0];
+  if (!file) return;
+  show(importProject(file, setStatus), null, true);
+  await loading;
+  await refreshPicker();
+  if (activeDocument) picker.value = activeDocument.id;
+  fileInput.value = '';
+});
 
-if (import.meta.hot) {
-  import.meta.hot.on('tako:model', (msg: { model: string; switched: boolean; change: ModelChange }) => {
-    if (msg.switched) {
-      picker.value = msg.model;
-      reload(msg.change && { ...msg.change, changed: [] }, true);
-    } else {
-      reload(msg.change, false);
-    }
-  });
+exportButton.addEventListener('click', async () => {
+  if (!activeDocument) return;
+  const exported = await exportModel();
+  const url = URL.createObjectURL(new Blob([exported.data], { type: 'application/x-step' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: exported.name });
+  link.click();
+  URL.revokeObjectURL(url);
+});
+
+async function historyAction(action: 'undo' | 'redo') {
+  if (!activeDocument) return;
+  const changed = changeRevision(action, activeDocument, setStatus);
+  const result = changed.then(({ document, model, command }) => ({ document, model, change: command }));
+  show(result.then(({ document, model }) => ({ document, model })), null, false);
+  const { change } = await result;
+  await loading;
+  setStatus(change.summary);
+  await refreshPicker();
 }
+
+undoButton.addEventListener('click', () => void historyAction('undo'));
+redoButton.addEventListener('click', () => void historyAction('redo'));
+
+refreshPicker().then((projects) => {
+  if (projects[0]) {
+    picker.value = projects[0].id;
+    show(openProject(projects[0].id, [], setStatus), null, true);
+  } else {
+    setStatus('Import an IFC model to begin');
+  }
+});
+
+const agentWindow = window as Window & { __takoAgentDisconnect?: () => void };
+agentWindow.__takoAgentDisconnect?.();
+agentWindow.__takoAgentDisconnect = connectAgent({
+  document: () => activeDocument,
+  status: setStatus,
+  query: queryDocument,
+  execute: (document, command) => executeCommand(document, command, setStatus),
+  revision: (action, document) => changeRevision(action, document, setStatus),
+  changed: async (opened, summary, ids) => {
+    show(Promise.resolve(opened), { rev: opened.document.revision, summary, changed: ids }, false);
+    await loading;
+    await refreshPicker();
+    picker.value = opened.document.id;
+  },
+});
 
 if (import.meta.env.DEV) {
   // Test hook: lets browser automation read renderer stats and drive the session.
-  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current } });
+  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument } });
 }

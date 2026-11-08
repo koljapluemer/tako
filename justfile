@@ -1,4 +1,4 @@
-# tako: IFC viewer + Claude-driven editing via MCP
+# tako: browser-owned IFC editor + stateless TypeScript MCP bridge
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -15,16 +15,16 @@ up: setup
     (cd viewer && exec ./node_modules/.bin/vite --port {{port}} --strictPort > ../work/viewer.log 2>&1) &
     viewer_pid=$!
     trap 'kill $viewer_pid 2>/dev/null || true' EXIT
-    for _ in $(seq 1 40); do curl -sf -o /dev/null localhost:{{port}}/models.json && break; sleep 0.25; done
+    for _ in $(seq 1 40); do curl -sf -o /dev/null localhost:{{port}}/ && break; sleep 0.25; done
     echo "viewer: http://localhost:{{port}}  (log: work/viewer.log)"
     command -v xdg-open >/dev/null && xdg-open "http://localhost:{{port}}" >/dev/null 2>&1 || true
     claude
 
-# Install viewer + server dependencies and fetch the external sample models
-setup: fetch-models
-    @mkdir -p work
+# Install browser and bridge dependencies
+setup:
     @[ -d viewer/node_modules ] || (cd viewer && npm ci)
-    @uv sync --quiet --directory server
+    @[ -d bridge/node_modules ] || (cd bridge && npm ci)
+    @cd bridge && npm run build --silent
 
 # Viewer dev server only (foreground)
 viewer: setup
@@ -35,7 +35,7 @@ vr: setup
     cd viewer && TAKO_HTTPS=1 npx vite --host --port {{port}} --strictPort
 
 # Claude Code with the tako-ifc MCP server (start `just viewer` separately)
-chat:
+chat: setup
     claude
 
 # Download the external test models into example_data/external (skips existing files)
@@ -50,21 +50,12 @@ fetch-models:
     fetch bsi-arch-ifc4x3.ifc "$bsi/IFC%204.3.2.0%20(IFC%204.3%20ADD2)/Simple-Scene/Building-Architecture.ifc"
     fetch s-office-archi.ifc "https://raw.githubusercontent.com/ThatOpen/engine_web-ifc/main/tests/ifcfiles/public/S_Office_Integrated%20Design%20Archi.ifc"
 
-# Typecheck the viewer and import-check the server
+# Typecheck and build the browser plus the stateless MCP bridge
 check: setup
-    cd viewer && npx tsc --noEmit
-    uv run --quiet --directory server python -c "import tako_ifc_mcp.server"
-    uv run --quiet --directory server pytest -q
+    cd viewer && npm run build
+    cd bridge && npm run check
     @echo ok
-
-# Run the edit benchmark through the Claude CLI (see server/benchmarks/run.py)
-bench *args: setup
-    uv run --quiet --directory server python benchmarks/run.py {{args}}
 
 # Production build of the viewer
 build: setup
     cd viewer && npm run build
-
-# Discard all edits and revision history (all models)
-reset:
-    rm -rf work

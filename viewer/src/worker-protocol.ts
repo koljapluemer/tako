@@ -1,5 +1,6 @@
 import type { SerializedBVH } from 'three-mesh-bvh';
 
+export const PROTOCOL_VERSION = 1 as const;
 export type Rgba = [number, number, number, number];
 /** [minX, minZ, maxX, maxZ] */
 export type Box2 = [number, number, number, number];
@@ -36,25 +37,84 @@ export type LoadResult = {
   floor: CollisionPart | null;
   solid: CollisionPart | null;
   storeys: StoreyInfo[];
-  /** IfcSite elements: walkable, but not somewhere a storey jump should land. */
   terrain: number[];
   coordination: number[];
 };
 
 export type ElementInfo = {
   expressID: number;
+  globalId: string | null;
   ifcClass: string;
   name: string | null;
   materials: string[];
   properties: Array<[string, string]>;
 };
 
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  schema: string;
+  revision: number;
+  updatedAt: string;
+  size: number;
+};
+
+export type DocumentSummary = ProjectSummary & {
+  documentId: string;
+  sourceFingerprint: string;
+};
+
+export type CommandTarget = { expressID?: number; globalId?: string };
+
+export type DocumentCommand =
+  | { kind: 'setName'; targets: CommandTarget[]; params: { name: string } }
+  | { kind: 'setAttribute'; targets: CommandTarget[]; params: { attribute: string; value: string | number | boolean | null } }
+  | { kind: 'setProperty'; targets: CommandTarget[]; params: { pset: string; name: string; value: string | number | boolean } }
+  | { kind: 'resizeFilling'; targets: CommandTarget[]; params: { width?: number; height?: number; anchor: 'center' } }
+  | { kind: 'moveElements'; targets: CommandTarget[]; params: { x: number; y: number; z: number } }
+  | { kind: 'deleteElements'; targets: CommandTarget[]; params: { confirmationToken: string } };
+
+export type CommandResult = {
+  ok: true;
+  commandId: string;
+  revision: number;
+  summary: string;
+  changed: number[];
+  warnings: string[];
+};
+
+export type AgentQuery =
+  | { method: 'model_overview'; params?: Record<string, never> }
+  | { method: 'find_elements'; params: { ifc_class?: string; storey?: string; exterior?: boolean; facing?: string; text?: string; sort_by?: string; limit?: number } }
+  | { method: 'get_element'; params: { element: string } }
+  | { method: 'context_around'; params: { target: string; radius?: number; limit?: number } }
+  | { method: 'get_focus'; params?: Record<string, never> }
+  | { method: 'list_materials'; params?: Record<string, never> };
+
+type RequestBase = { protocolVersion: typeof PROTOCOL_VERSION; id: number };
+
 export type WorkerRequest =
-  | { type: 'load'; id: number; url: string; standalone: number[] }
-  | { type: 'inspect'; id: number; expressID: number };
+  | (RequestBase & { type: 'listProjects' })
+  | (RequestBase & { type: 'importProject'; name: string; data: ArrayBuffer })
+  | (RequestBase & { type: 'openProject'; projectId: string; standalone: number[] })
+  | (RequestBase & { type: 'render'; standalone: number[] })
+  | (RequestBase & { type: 'inspect'; expressID: number })
+  | (RequestBase & { type: 'query'; query: AgentQuery })
+  | (RequestBase & { type: 'select'; expressID: number | null })
+  | (RequestBase & { type: 'exportProject' })
+  | (RequestBase & { type: 'execute'; documentId: string; baseRevision: number; command: DocumentCommand })
+  | (RequestBase & { type: 'undo'; documentId: string; baseRevision: number })
+  | (RequestBase & { type: 'redo'; documentId: string; baseRevision: number })
+  | (RequestBase & { type: 'cancel'; requestId: number });
 
 export type WorkerResponse =
-  | { type: 'progress'; message: string }
-  | { type: 'loaded'; id: number; result: LoadResult }
+  | { type: 'progress'; id?: number; message: string }
+  | { type: 'projects'; id: number; projects: ProjectSummary[] }
+  | { type: 'opened'; id: number; document: DocumentSummary; result: LoadResult }
+  | { type: 'rendered'; id: number; document: DocumentSummary; result: LoadResult }
   | { type: 'inspected'; id: number; info: ElementInfo | null }
-  | { type: 'error'; id: number; message: string };
+  | { type: 'queried'; id: number; result: unknown }
+  | { type: 'selected'; id: number }
+  | { type: 'exported'; id: number; name: string; data: ArrayBuffer }
+  | { type: 'executed'; id: number; document: DocumentSummary; command: CommandResult; result: LoadResult }
+  | { type: 'error'; id: number; code: string; message: string };

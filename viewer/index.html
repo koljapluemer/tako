@@ -6,10 +6,13 @@
     <title>tako – IFC viewer</title>
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1f22; }
-      #model {
+      #project-controls {
         position: fixed; top: 12px; right: 12px; max-width: 40vw;
-        font: 13px/1.4 system-ui, sans-serif; color: #eee;
+        display: flex; gap: 5px; font: 13px/1.4 system-ui, sans-serif; color: #eee;
+      }
+      #model, #project-controls button {
         background: rgba(0, 0, 0, 0.7); border: 1px solid #555; border-radius: 6px; padding: 5px 8px;
+        color: #eee;
       }
       #status {
         position: fixed; top: 12px; left: 12px; padding: 6px 10px;
@@ -21,7 +24,14 @@
   </head>
   <body>
     <div id="status">Loading…</div>
-    <select id="model" title="Model"></select>
+    <div id="project-controls">
+      <select id="model" title="Local project"></select>
+      <button id="import" type="button">Import IFC</button>
+      <button id="export" type="button">Export</button>
+      <button id="undo" type="button" title="Undo">↶</button>
+      <button id="redo" type="button" title="Redo">↷</button>
+      <input id="ifc-file" type="file" accept=".ifc,application/x-step" hidden>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

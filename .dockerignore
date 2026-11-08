@@ -1,0 +1,10 @@
+.git
+.env
+data
+models
+work
+example_data
+viewer/node_modules
+viewer/dist
+bridge/node_modules
+bridge/dist

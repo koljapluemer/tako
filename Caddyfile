@@ -1,0 +1,4 @@
+{$TAKO_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy viewer:80
+}
