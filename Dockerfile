@@ -5,6 +5,7 @@ COPY viewer/scripts ./scripts
 RUN npm ci
 COPY viewer/index.html viewer/tsconfig.json viewer/vite.config.ts ./
 COPY viewer/src ./src
+COPY viewer/public ./public
 RUN npm run build
 
 FROM nginx:1.27-alpine

@@ -38,11 +38,11 @@ vr: setup
 chat: setup
     claude
 
-# Download the external test models into example_data/external (skips existing files)
+# Download the external test models into viewer/public/samples/external (skips existing files)
 fetch-models:
     #!/usr/bin/env bash
     set -euo pipefail
-    dir=example_data/external
+    dir=viewer/public/samples/external
     mkdir -p "$dir"
     bsi="https://raw.githubusercontent.com/buildingSMART/Sample-Test-Files/main"
     fetch() { [ -s "$dir/$1" ] || { echo "downloading $1"; curl -sfL "$2" -o "$dir/$1"; }; }

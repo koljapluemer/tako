@@ -5,7 +5,6 @@ work/
 .venv
 __pycache__
 .vite
-example_data/
 .bench/
 .env
 data/
