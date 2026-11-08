@@ -1,0 +1,61 @@
+# tako: IFC viewer + Claude-driven editing via MCP
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+port := env_var_or_default("TAKO_PORT", "5173")
+
+# List recipes
+default:
+    @just --list
+
+# Everything: install if needed, start the viewer in the background, open Claude in the foreground
+up: setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd viewer && exec ./node_modules/.bin/vite --port {{port}} --strictPort > ../work/viewer.log 2>&1) &
+    viewer_pid=$!
+    trap 'kill $viewer_pid 2>/dev/null || true' EXIT
+    for _ in $(seq 1 40); do curl -sf -o /dev/null localhost:{{port}}/models.json && break; sleep 0.25; done
+    echo "viewer: http://localhost:{{port}}  (log: work/viewer.log)"
+    command -v xdg-open >/dev/null && xdg-open "http://localhost:{{port}}" >/dev/null 2>&1 || true
+    claude
+
+# Install viewer + server dependencies and fetch the external sample models
+setup: fetch-models
+    @mkdir -p work
+    @[ -d viewer/node_modules ] || (cd viewer && npm ci)
+    @uv sync --quiet --directory server
+
+# Viewer dev server only (foreground)
+viewer: setup
+    cd viewer && npx vite --port {{port}} --strictPort
+
+# Claude Code with the tako-ifc MCP server (start `just viewer` separately)
+chat:
+    claude
+
+# Download the external test models into example_data/external (skips existing files)
+fetch-models:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=example_data/external
+    mkdir -p "$dir"
+    bsi="https://raw.githubusercontent.com/buildingSMART/Sample-Test-Files/main"
+    fetch() { [ -s "$dir/$1" ] || { echo "downloading $1"; curl -sfL "$2" -o "$dir/$1"; }; }
+    fetch bsi-arch-ifc2x3.ifc "$bsi/IFC%202.3.0.1%20(IFC%202x3%20TC1)/Simple-Scene/Building-Architecture.ifc"
+    fetch bsi-arch-ifc4x3.ifc "$bsi/IFC%204.3.2.0%20(IFC%204.3%20ADD2)/Simple-Scene/Building-Architecture.ifc"
+    fetch s-office-archi.ifc "https://raw.githubusercontent.com/ThatOpen/engine_web-ifc/main/tests/ifcfiles/public/S_Office_Integrated%20Design%20Archi.ifc"
+
+# Typecheck the viewer and import-check the server
+check: setup
+    cd viewer && npx tsc --noEmit
+    uv run --quiet --directory server python -c "import tako_ifc_mcp.server"
+    @echo ok
+
+# Production build of the viewer
+build: setup
+    cd viewer && npm run build
+
+# Discard all edits and revision history (all models)
+reset:
+    rm -rf work

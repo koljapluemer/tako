@@ -6,15 +6,22 @@
     <title>tako – IFC viewer</title>
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1f22; }
+      #model {
+        position: fixed; top: 12px; right: 12px; max-width: 40vw;
+        font: 13px/1.4 system-ui, sans-serif; color: #eee;
+        background: rgba(0, 0, 0, 0.7); border: 1px solid #555; border-radius: 6px; padding: 5px 8px;
+      }
       #status {
         position: fixed; top: 12px; left: 12px; padding: 6px 10px;
         font: 13px/1.4 system-ui, sans-serif; color: #eee;
         background: rgba(0, 0, 0, 0.55); border-radius: 6px; pointer-events: none;
+        max-width: calc(60vw - 48px);
       }
     </style>
   </head>
   <body>
     <div id="status">Loading…</div>
+    <select id="model" title="Model"></select>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

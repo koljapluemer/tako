@@ -1,3 +1,8 @@
 node_modules
 dist
-public/wasm
+viewer/public/wasm
+work/
+.venv
+__pycache__
+.vite
+example_data/

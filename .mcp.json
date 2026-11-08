@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tako-ifc": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--directory", "server", "tako-ifc-mcp"],
+      "env": {
+        "TAKO_MODEL": "example_data/AC20-Institute-Var-2.ifc",
+        "TAKO_WORKDIR": "work"
+      }
+    }
+  }
+}
