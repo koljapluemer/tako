@@ -6,7 +6,7 @@ import {
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
-import { fetchSample, sampleFileName, SAMPLES, type Sample } from './samples';
+import { addCorpusSamples, fetchSample, sampleFileName, SAMPLES, type Sample } from './samples';
 import { XRWalk } from './xr/session';
 
 const statusEl = document.getElementById('status')!;
@@ -308,6 +308,7 @@ agentWindow.__takoAgentDisconnect = connectAgent({
 });
 
 if (import.meta.env.DEV) {
+  void addCorpusSamples().then(refreshPicker).catch(console.warn);
   // Test hook: lets browser automation read renderer stats and drive the session.
   Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument } });
 }

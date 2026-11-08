@@ -3,6 +3,7 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { LoadedModel } from '../model';
 import type { Sample } from '../samples';
 import { Fade } from './fade';
+import { Hud } from './hud';
 import { Inspect } from './inspect';
 import { spawnLanding, storeyLandings, type Landing } from './landing';
 import { Menu } from './menu';
@@ -34,6 +35,7 @@ export class XRWalk {
   private teleport: Teleport;
   private menu: Menu;
   private inspect: Inspect;
+  private hud: Hud | null;
   private pointers: Pointer[] = [];
   private model: LoadedModel | null = null;
   private spawn: Landing | null = null;
@@ -58,6 +60,7 @@ export class XRWalk {
     this.menu = new Menu(scene, camera);
     this.inspect = new Inspect(scene, camera);
     this.menu.show(false);
+    this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
 
     this.teleport.claim = (pointer) => {
       const ray = pointerRay(pointer, new THREE.Ray());
@@ -269,6 +272,7 @@ export class XRWalk {
     this.teleport.update(this.pointers);
     const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => pointerRay(p, new THREE.Ray()));
     this.menu.update(dt, rays);
+    this.hud?.update(now);
     this.fade.update(now);
   }
 }

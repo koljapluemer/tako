@@ -50,6 +50,19 @@ fetch-models:
     fetch bsi-arch-ifc4x3.ifc "$bsi/IFC%204.3.2.0%20(IFC%204.3%20ADD2)/Simple-Scene/Building-Architecture.ifc"
     fetch s-office-archi.ifc "https://raw.githubusercontent.com/ThatOpen/engine_web-ifc/main/tests/ifcfiles/public/S_Office_Integrated%20Design%20Archi.ifc"
 
+# Build the gitignored VR test corpus in viewer/.corpus: synthetic edge cases plus openly licensed real models
+corpus: setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node viewer/scripts/generate-corpus.mjs
+    dir=viewer/.corpus/real
+    mkdir -p "$dir"
+    bsi="https://raw.githubusercontent.com/buildingSMART/Sample-Test-Files/main"
+    fetch() { [ -s "$dir/$1" ] || { echo "downloading $1"; curl -sfL "$2" -o "$dir/$1"; }; }
+    fetch bsi-arch-ifc2x3.ifc "$bsi/IFC%202.3.0.1%20(IFC%202x3%20TC1)/Simple-Scene/Building-Architecture.ifc"
+    fetch bsi-arch-ifc4x3.ifc "$bsi/IFC%204.3.2.0%20(IFC%204.3%20ADD2)/Simple-Scene/Building-Architecture.ifc"
+    fetch s-office-archi.ifc "https://raw.githubusercontent.com/ThatOpen/engine_web-ifc/main/tests/ifcfiles/public/S_Office_Integrated%20Design%20Archi.ifc"
+
 # Typecheck and build the browser plus the stateless MCP bridge
 check: setup
     cd viewer && npm run build
