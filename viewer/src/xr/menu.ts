@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import type { Sample } from '../samples';
-import type { Landing } from './landing';
 import { CanvasPanel } from './panel';
 
+export type MenuChoice = 'arc' | 'mini';
+
 /** `inert` rows only display text; pressing one leaves the panel open. */
-type Row = { label: string; dim?: boolean; inert?: boolean; run?: () => void };
+type Row = { label: string; dim?: boolean; inert?: boolean; choice?: MenuChoice };
 
 const ROW = 110;
 const PANEL_W = 0.62;
@@ -21,18 +21,14 @@ function headingXZ(camera: THREE.Camera, out: THREE.Vector3) {
   return out.normalize();
 }
 
-/** A small body-locked button that opens a storey list. Selected with plain `select`, so any input can use it. */
+/** A small body-locked button for inputs with no face buttons, plus the one place status can be shown in VR. */
 export class Menu {
   private button = new CanvasPanel(0.09, 0.09, 1400);
   private panel: CanvasPanel | null = null;
-  private landings: Landing[] = [];
   private hovered = -1;
-  private samples: Sample[] = [];
-  private page: 'landings' | 'samples' = 'landings';
   private notice: { text: string; busy: boolean } | null = null;
 
-  onChoose: (landing: Landing) => void = () => {};
-  onSample: (sample: Sample) => void = () => {};
+  onChoose: (choice: MenuChoice, ray: THREE.Ray) => void = () => {};
 
   constructor(private scene: THREE.Scene, private camera: THREE.Camera) {
     const { ctx, canvasWidth: size } = this.button;
@@ -46,21 +42,15 @@ export class Menu {
     scene.add(this.button.mesh);
   }
 
-  setLandings(landings: Landing[]) {
-    this.close();
-    // Highest storey at the top, like a lift panel.
-    this.landings = [...landings].reverse();
-  }
-
-  setSamples(samples: Sample[]) {
-    this.samples = samples;
-  }
-
   /** Shows one line of text in the panel; `busy` hides the Close row. A new model closes it. */
   showNotice(text: string, busy: boolean) {
     this.close();
     this.notice = { text, busy };
     this.open();
+  }
+
+  clearNotice() {
+    if (this.notice) this.close();
   }
 
   show(on: boolean) {
@@ -90,21 +80,10 @@ export class Menu {
   private rows(): Row[] {
     const close: Row = { label: 'Close', dim: true };
     if (this.notice) return [{ label: this.notice.text, inert: true }, ...(this.notice.busy ? [] : [close])];
-    if (this.page === 'samples') {
-      return [
-        ...this.samples.map((sample) => ({ label: sample.name, run: () => this.onSample(sample) })),
-        { label: 'Back', dim: true, run: () => this.open() },
-      ];
-    }
-    return [
-      ...this.landings.map((landing) => ({ label: landing.name, run: () => this.onChoose(landing) })),
-      ...(this.samples.length ? [{ label: 'Switch building', run: () => this.open('samples') }] : []),
-      close,
-    ];
+    return [{ label: 'Revisions', choice: 'arc' }, { label: 'Mini model', choice: 'mini' }, close];
   }
 
-  private open(page: 'landings' | 'samples' = 'landings') {
-    this.page = page;
+  private open() {
     const height = (this.rows().length * ROW + 2 * PADDING) / 1000;
     const panel = new CanvasPanel(PANEL_W, height);
     this.panel = panel;
@@ -142,7 +121,7 @@ export class Menu {
         const item = this.rows()[row];
         if (item.inert) return true;
         this.close();
-        item.run?.();
+        if (item.choice) this.onChoose(item.choice, ray);
         return true;
       }
       if (this.panel.hit(ray)) return true;

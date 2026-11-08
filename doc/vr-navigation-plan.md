@@ -4,15 +4,18 @@ Goal: make tako properly usable in VR on a **standalone Meta Quest, opened from
 Quest Browser**, with natural walking, teleport, high-level navigation points
 and quick switching between versions of a building.
 
-Status: proposed. Nothing here is implemented yet unless listed under "Already
-in place".
+Status: implemented on the `vr-navigation` branch and tested without a headset.
+The "Done when" criteria that need a real Quest are tracked in
+[vr-headset-checklist.md](vr-headset-checklist.md), and thresholds stay
+provisional until those results are in.
 
 ## Decisions
 
 - **Target:** standalone Quest. PCVR/Link is not a target.
 - **Locomotion:** natural walking plus teleport. No joystick translation.
 - **Content on the headset:** for now, Quest users look at the demo models.
-  Demo versions ship as static files with the site.
+  Versions are only ever what users create, stored in the browser. No revision
+  files are committed.
 - **Desktop-to-headset sync is deferred.** Edits made through the desktop agent
   do not reach the headset. See "Deferred".
 - **No wrist anchoring, tabs or flat multi-page menus.** A control opens an
@@ -33,20 +36,15 @@ in place".
 | Natural walking | `viewer/src/xr/walking.ts` | Head tracked 1:1, rig follows floor height, walls fade to black rather than pushing the user |
 | Teleport | `viewer/src/xr/teleport.ts` | Arc, landing validation, fade, hold or stick aiming, choice of facing |
 | Collision | `viewer/src/collision.ts` | BVH built in the worker, floor and solid parts |
-| Menu | `viewer/src/xr/menu.ts` | Storeys and sample buildings; replaced by this plan |
+| Menu | `viewer/src/xr/menu.ts` | Body-locked button, picker for hand input, notices |
 | Position across revisions | `XRWalk.setModel` in `viewer/src/xr/session.ts` | Preserved, including origin shifts; lost when switching files |
 
 Known gaps:
 
-- Only the head is collision-checked, so railings, parapets and furniture below
-  head height can be walked through.
-- Teleport landings are checked locally, so unreachable spots are accepted.
-- Walkable surfaces come from a fixed IFC class list (`viewer/src/ifc-classes.ts`).
-- No controller or hand models are drawn.
-- History entries only have generated summaries, and the worker can only step
-  undo and redo.
-- Render batches are per colour across the whole building, so they cannot be
-  culled usefully. Each door is its own mesh.
+- Each door still needs its own material when near, so doors cost one draw call
+  each inside the nearby cell.
+- Revisions cannot reach the headset yet (see "Deferred"), so on a Quest the arc
+  normally shows the current version and "Other buildings".
 
 ## Interaction design
 
@@ -114,8 +112,8 @@ Done when: we have measured budgets and a repeatable way to test against them.
 
 - Split colour batches by storey and spatial cell so frustum culling works.
 - Merge doors away from the user; only nearby doors need individual opacity.
-- Enable [multiview](https://discourse.threejs.org/t/oculus-multiview-extension-support-added-to-three-for-quest-performance/80202)
-  if it holds up in testing.
+- Multiview is not available: three.js 0.187 has no multiview path in
+  `WebGLRenderer`, and `WebGPURenderer` disables it for XR.
 
 Done when: large corpus models hold frame rate on the headset.
 
@@ -159,17 +157,13 @@ models with no `IfcSpace` at all.
 
 ### 5. Versions
 
-- One version source interface with two implementations: a static manifest for
-  demo models (file and title per version), and project history for local
-  projects.
+- One version source interface, implemented by project history.
 - Add a real title field to history entries, and jump-to-revision in the worker.
-- Keep position across versions stored as separate files, using shared
-  coordinates or matching GlobalIds, with a safe fallback when neither exists.
+- Keep position across versions. They are the same building, so they share coordinates.
 - If the spot no longer exists, go to the nearest walkable point.
 - Cancel stale loads instead of queueing them.
-- Cache processed geometry by content hash so A/B switching is instant. If
-  parsing on the headset is still too slow, precompute demo data at build time
-  and serve it statically.
+- Keep recent revisions' geometry in memory so A/B switching is instant.
+  Persistent caching waits for the measured storage quota.
 - Build the revision arc.
 
 Done when: A/B switching in the headset keeps position and feels immediate.
@@ -190,7 +184,6 @@ Done when: intended pins can be hit reliably with both hands and controllers.
 ## Open questions
 
 - How much local storage does Quest Browser actually allow? (Step 1)
-- Does multiview work well with this three.js setup? (Steps 1-2)
 - How heavy is Recast's WASM on the headset? (Step 3)
 - The medial-axis, Recast partitioning and elimination details above have not
   been validated against sources or prototyped yet.

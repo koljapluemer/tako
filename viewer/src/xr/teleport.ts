@@ -19,6 +19,7 @@ export type Pointer = {
   index: number;
   ray: THREE.Group;
   grip: THREE.Group;
+  hand: THREE.Group & { joints: Record<string, THREE.Group | undefined> };
   source: XRInputSource | null;
   downAt: number | null;
   /** This press belongs to UI or has already become an aim. */
@@ -50,7 +51,7 @@ export function headYaw(camera: THREE.Camera): number {
 }
 
 /** Thumbstick axes; xr-standard puts them at 2/3, some older mappings at 0/1. */
-function stick(source: XRInputSource | null): [number, number] | null {
+export function stick(source: XRInputSource | null): [number, number] | null {
   const pad = source?.gamepad;
   if (!pad || source!.hand || source!.targetRayMode !== 'tracked-pointer') return null;
   const a = pad.axes;
@@ -122,6 +123,10 @@ export class Teleport {
     this.ribbon.visible = false;
     this.ribbon.renderOrder = 8000;
     scene.add(this.ribbon, this.marker.group);
+  }
+
+  get aiming() {
+    return this.active != null;
   }
 
   setModel(collision: Collision) {

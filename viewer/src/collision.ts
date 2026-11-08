@@ -101,9 +101,12 @@ const navRay = new Ray();
 /** Where a person can actually get to. Component 0 is the largest connected area. */
 export class NavMesh {
   private part: Part;
+  /** Triangle soup, 9 values per triangle. */
+  readonly positions: Float32Array;
 
   constructor(data: CollisionPart) {
     this.part = new Part(data);
+    this.positions = data.positions;
   }
 
   /** The navmesh surface under (x, z) within `reach` of height y. */
