@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Collision, Hit } from '../collision';
-import { isValidLanding } from './landing';
+import { isValidLanding, type Reach } from './landing';
 
 const SPEED = 8;
 const GRAVITY = 9.81;
@@ -100,6 +100,8 @@ export class Teleport {
   private samples = Array.from({ length: SEGMENTS + 1 }, () => new THREE.Vector3());
   private marker = buildMarker();
   locked = false;
+  /** Null until the navmesh arrives, or when none could be built. */
+  reach: Reach | null = null;
 
   /** First refusal on a press: UI claims it here. */
   claim: (pointer: Pointer) => boolean = () => false;
@@ -296,6 +298,6 @@ export class Teleport {
       this.destination = null;
       return;
     }
-    this.destination = { point: hit.point, valid: isValidLanding(this.collision!, hit, this.headHeight()) };
+    this.destination = { point: hit.point, valid: isValidLanding(this.collision!, hit, this.headHeight(), this.reach) };
   }
 }

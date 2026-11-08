@@ -29,6 +29,10 @@ class Part {
     return hit ? hit.distance : Infinity;
   }
 
+  closest(point: Vector3, max: number): Vector3 | null {
+    return this.bvh.closestPointToPoint(point, undefined, 0, max)?.point ?? null;
+  }
+
   expressIdOf(faceIndex: number): number {
     const { rangeStarts, rangeIds } = this.data;
     let lo = 0;
@@ -88,5 +92,33 @@ export class Collision {
   dispose() {
     this.floorPart?.dispose();
     this.solidPart?.dispose();
+  }
+}
+
+const DOWN = new Vector3(0, -1, 0);
+const navRay = new Ray();
+
+/** Where a person can actually get to. Component 0 is the largest connected area. */
+export class NavMesh {
+  private part: Part;
+
+  constructor(data: CollisionPart) {
+    this.part = new Part(data);
+  }
+
+  /** The navmesh surface under (x, z) within `reach` of height y. */
+  at(x: number, y: number, z: number, reach: number): { y: number; component: number } | null {
+    navRay.origin.set(x, y + reach, z);
+    navRay.direction.copy(DOWN);
+    const hit = this.part.raycast(navRay, 2 * reach);
+    return hit && { y: hit.point.y, component: this.part.expressIdOf(hit.faceIndex!) };
+  }
+
+  nearest(point: Vector3, max: number): Vector3 | null {
+    return this.part.closest(point, max);
+  }
+
+  dispose() {
+    this.part.dispose();
   }
 }

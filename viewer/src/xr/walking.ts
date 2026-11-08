@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Collision } from '../collision';
+import type { Collision, NavMesh } from '../collision';
 import type { DoorCell, DoorInfo } from '../model';
 import type { Fade } from './fade';
 import { STEP } from './landing';
@@ -9,6 +9,10 @@ const DOOR_FADE_NEAR = 0.6;
 const DOOR_FADE_FAR = 1.2;
 const OFF_FLOOR_DIM = 0.6;
 const OFF_FLOOR_DELAY = 0.25;
+/** Above step height, below the head: railings, parapets, furniture. */
+const BODY_PROBE_HEIGHTS = [0.55, 0.95];
+const BODY_RADIUS = 0.12;
+const BODY_DIM = 0.35;
 /** Someone who has walked clean through a wall shouldn't be left in the dark. */
 const BLOCKED_RECOVERY = 2;
 const DOWN = new THREE.Vector3(0, -1, 0);
@@ -16,6 +20,7 @@ const PROBES: Array<[number, number]> = [[0, 0], [0.15, 0], [-0.15, 0], [0, 0.15
 
 const ray = new THREE.Ray();
 const head = new THREE.Vector3();
+const body = new THREE.Vector3();
 const toHead = new THREE.Vector3();
 
 /**
@@ -26,6 +31,8 @@ const toHead = new THREE.Vector3();
 export class Walking {
   private collision: Collision | null = null;
   private doorCells: DoorCell[] = [];
+  private nav: NavMesh | null = null;
+  private wallHint = 0;
   private lastClear: THREE.Vector3 | null = null;
   private blockedFor = 0;
   private offFloorFor = 0;
@@ -39,7 +46,12 @@ export class Walking {
     this.restoreDoors();
     this.collision = collision;
     this.doorCells = doorCells;
+    this.nav = null;
     this.lastClear = null;
+  }
+
+  setNavigation(nav: NavMesh | null) {
+    this.nav = nav;
   }
 
   /** After the rig has been moved on purpose (teleport, recentre, reload). */
@@ -60,7 +72,16 @@ export class Walking {
       const hit = this.collision.raycastFloor(ray, 2 * STEP + 0.05);
       if (hit) return hit.point.y;
     }
-    return null;
+    return this.navFloorAt(x, z, nearY);
+  }
+
+  /** Floors that aren't floor-class (proxies, for one), and door thresholds, are known only to the navmesh. */
+  private navFloorAt(x: number, z: number, nearY: number): number | null {
+    const surface = this.nav?.at(x, nearY, z, STEP + 0.05);
+    if (!surface) return null;
+    ray.origin.set(x, nearY + STEP + 0.05, z);
+    ray.direction.copy(DOWN);
+    return this.collision!.raycast(ray, 2 * STEP + 0.05)?.point.y ?? surface.y;
   }
 
   private inDoorway(x: number, z: number) {
@@ -78,7 +99,7 @@ export class Walking {
       this.fade.set('edge', 0);
       return true;
     }
-    if (!this.collision?.hasFloor || this.inDoorway(head.x, head.z)) {
+    if ((!this.collision?.hasFloor && !this.nav) || this.inDoorway(head.x, head.z)) {
       // Slabs often stop at the door opening; that isn't a ledge.
       this.fade.set('edge', 0);
       return false;
@@ -107,20 +128,31 @@ export class Walking {
       this.blockedFor += dt;
       if (this.blockedFor > BLOCKED_RECOVERY && distance >= HEAD_RADIUS) this.lastClear = head.clone();
       this.fade.set('wall', 1);
-      this.fade.showHint(1);
+      this.wallHint = 1;
       return false;
     }
     this.blockedFor = 0;
     if (distance >= HEAD_RADIUS) {
       this.lastClear = head.clone();
       this.fade.set('wall', 0);
-      this.fade.showHint(0);
+      this.wallHint = 0;
       return true;
     }
     const level = THREE.MathUtils.smoothstep(HEAD_RADIUS - distance, 0, HEAD_RADIUS * 0.7);
     this.fade.set('wall', level);
-    this.fade.showHint(level);
+    this.wallHint = level;
     return false;
+  }
+
+  /** Low obstacles only warn: like walls, the user can't be pushed. */
+  private updateBody(onFloor: boolean) {
+    const collision = this.collision!;
+    const blocked = onFloor && BODY_PROBE_HEIGHTS.some((height) => {
+      body.set(head.x, this.floorY + height, head.z);
+      return collision.distanceTo(body, BODY_RADIUS) < BODY_RADIUS;
+    });
+    this.fade.set('body', blocked ? BODY_DIM : 0);
+    this.fade.showHint(Math.max(this.wallHint, blocked ? 1 : 0));
   }
 
   private updateDoors() {
@@ -168,6 +200,7 @@ export class Walking {
     const onFloor = this.updateFloor(dt);
     this.rig.position.y += (this.floorY - this.rig.position.y) * (1 - Math.exp(-dt / 0.05));
     const clear = this.updateWalls(dt);
+    this.updateBody(onFloor);
     this.updateDoors();
     if (onFloor && clear) (this.lastValid ??= new THREE.Vector3()).set(head.x, this.floorY, head.z);
   }

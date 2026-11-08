@@ -41,7 +41,12 @@ export type LoadResult = {
   storeys: StoreyInfo[];
   terrain: number[];
   coordination: number[];
+  /** Pass to a `navigation` request; a later load makes it stale. */
+  navToken: number;
 };
+
+/** `rangeIds` in `mesh` hold connected-component ranks; 0 is the largest walkable area. */
+export type NavBuild = { mesh: CollisionPart | null };
 
 export type ElementInfo = {
   expressID: number;
@@ -107,6 +112,7 @@ export type WorkerRequest =
   | (RequestBase & { type: 'execute'; documentId: string; baseRevision: number; command: DocumentCommand })
   | (RequestBase & { type: 'undo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'redo'; documentId: string; baseRevision: number })
+  | (RequestBase & { type: 'navigation'; token: number })
   | (RequestBase & { type: 'cancel'; requestId: number });
 
 export type WorkerResponse =
@@ -119,4 +125,5 @@ export type WorkerResponse =
   | { type: 'selected'; id: number }
   | { type: 'exported'; id: number; name: string; data: ArrayBuffer }
   | { type: 'executed'; id: number; document: DocumentSummary; command: CommandResult; result: LoadResult }
+  | { type: 'navigated'; id: number; result: NavBuild }
   | { type: 'error'; id: number; code: string; message: string };

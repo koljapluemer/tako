@@ -140,22 +140,27 @@ function floorPlan(z, { cols = 3, roomW = 5, roomD = 4, corridor = 2, floorCls =
 function stairs(x, y, z, width = 1.2) {
   const steps = 16;
   const rise = STOREY_H / steps;
-  const going = 0.28;
+  const going = 0.24;
   const boxes = Array.from({ length: steps }, (_, i) => box(x + i * going, y, z + i * rise, x + (i + 1) * going, y + width, z + (i + 1) * rise));
   return { cls: 'IFCSTAIRFLIGHT', boxes };
 }
 
 const levels = (n, make) => ({ storeys: Array.from({ length: n }, (_, i) => ({ z: i * STOREY_H, elements: make(i * STOREY_H, i) })) });
-// The stair well sits in the corridor of the storey above it.
-const WELL = { x0: 3, x1: 8, y0: 4, y1: 6 };
+// The flight runs along one side of a wide corridor, between two doors, so it blocks neither.
+const WIDE = 3.2;
+const WELL = { x0: 8, x1: 12, y0: 4.1, y1: 5.4 };
+const withStair = (options) => (z, i) => [
+  ...floorPlan(z, { corridor: WIDE, entrance: i === 0, skip: i ? WELL : null, ...options }),
+  ...(i === 0 ? [stairs(8.1, 4.15, z)] : []),
+];
 
 export const CASES = {
-  'with-spaces': () => write(levels(2, (z, i) => [...floorPlan(z, { entrance: i === 0, spaces: true, skip: i ? WELL : null }), ...(i === 0 ? [stairs(3.2, 4.4, z)] : [])])),
-  'no-spaces': () => write(levels(2, (z, i) => [...floorPlan(z, { entrance: i === 0, furniture: true, skip: i ? WELL : null }), ...(i === 0 ? [stairs(3.2, 4.4, z)] : [])])),
+  'with-spaces': () => write(levels(2, withStair({ spaces: true }))),
+  'no-spaces': () => write(levels(2, withStair({ furniture: true }))),
   'no-stairs': () => write(levels(2, (z, i) => floorPlan(z, { entrance: i === 0 }))),
-  'proxy-floors': () => write(levels(2, (z, i) => [...floorPlan(z, { floorCls: 'IFCBUILDINGELEMENTPROXY', entrance: i === 0, skip: i ? WELL : null }), ...(i === 0 ? [stairs(3.2, 4.4, z)] : [])])),
+  'proxy-floors': () => write(levels(2, withStair({ floorCls: 'IFCBUILDINGELEMENTPROXY' }))),
   atrium: () => write(levels(3, (z, i) => floorPlan(z, { cols: 5, entrance: i === 0, skip: i ? { x0: 8, x1: 17, y0: 1, y1: 9 } : null }))),
-  'broken-relationships': () => write(levels(2, (z, i) => [...floorPlan(z, { entrance: i === 0, skip: i ? WELL : null }), ...(i === 0 ? [stairs(3.2, 4.4, z)] : [])]), { contain: false, useStoreys: false }),
+  'broken-relationships': () => write(levels(2, withStair({})), { contain: false, useStoreys: false }),
   large: () => write(levels(8, (z, i) => floorPlan(z, { cols: 40, entrance: i === 0 }))),
 };
 

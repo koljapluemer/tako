@@ -2,18 +2,20 @@
 // Parses IFC off the main thread: a stalled frame in a headset is physically unpleasant.
 import { BufferAttribute, BufferGeometry, Matrix3, Matrix4, Vector3 } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
+import { boundsOf, buildNavmesh, initNavmesh, type Bounds as NavBounds, type NavInput } from './nav/navmesh';
 import { cellKey } from './render-cells';
 import {
   IFCBUILDINGSTOREY, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
   IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE,
   IFCREAL, IFCRELDEFINESBYPROPERTIES, IFCRELFILLSELEMENT, IFCSIUNIT, IFCSITE, IfcAPI,
 } from 'web-ifc';
-import { classify, isDoor, isSlab, isStair } from './ifc-classes';
+import { classify, isDoor, isFurniture, isSlab, isStair } from './ifc-classes';
 import {
   commitProject, exportProject, importProject, listProjects, loadRevision, openProject, saveFocus,
   type HistoryEntry, type ProjectManifest,
 } from './project-store';
-import { PROTOCOL_VERSION, type AgentQuery, type DocumentCommand } from './worker-protocol';
+import {  PROTOCOL_VERSION, type AgentQuery, type DocumentCommand, type NavBuild,
+} from './worker-protocol';
 import type {
   Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, Rgba, StoreyInfo,
   WorkerRequest, WorkerResponse,
@@ -191,6 +193,21 @@ function readStoreys(modelID: number, slabs: Map<number, Bounds>, stairs: Map<nu
 }
 
 // --- requests ---------------------------------------------------------------
+let navInput: NavInput | null = null;
+let navToken = 0;
+
+async function navigation(token: number): Promise<{ result: NavBuild; transfer: Transferable[] }> {
+  if (token !== navToken || !navInput) return { result: { mesh: null }, transfer: [] };
+  const input = navInput;
+  navInput = null;
+  await initNavmesh();
+  const built = buildNavmesh(input);
+  if (!built) return { result: { mesh: null }, transfer: [] };
+  const transfer = new Set<ArrayBuffer>();
+  const chunks: Chunk[] = built.components.map(({ positions, indices }, rank) => ({ positions, indices, normals: new Float32Array(0), expressID: rank }));
+  return { result: { mesh: buildCollision(chunks, transfer) }, transfer: [...transfer] };
+}
+
 async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ result: LoadResult; transfer: Transferable[] }> {
   await ready;
   if (openModel != null) api.CloseModel(openModel);
@@ -210,12 +227,15 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   const stairs = new Map<number, Bounds>();
   const terrain = new Set<number>();
   const allBounds = new Map<number, Bounds>();
+  const doorBounds: NavBounds[] = [];
+  const furnitureBounds: NavBounds[] = [];
 
   api.StreamAllMeshes(modelID, (flatMesh) => {
     const expressID = flatMesh.expressID;
     const type = api.GetLineType(modelID, expressID);
     const walk = classify(type, () => api.GetLine(modelID, expressID).PredefinedType?.value);
     const door = isDoor(type);
+    const furniture = isFurniture(type);
     if (type === IFCSITE) terrain.add(expressID);
     const placed = flatMesh.geometries;
     for (let i = 0; i < placed.size(); i++) {
@@ -228,6 +248,8 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
       const color: Rgba = [pg.color.x, pg.color.y, pg.color.z, pg.color.w];
 
       const cell = cellKey(chunk.positions);
+      if (door) doorBounds.push(boundsOf(chunk.positions));
+      if (furniture) furnitureBounds.push(boundsOf(chunk.positions));
       if (door || standalone.has(expressID)) {
         single.push({ color, positions: chunk.positions, normals: chunk.normals, indices: chunk.indices, expressID, door, doorCell: door ? cell : null });
         if (door) {
@@ -308,6 +330,11 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
     transfer.add(part.indices.buffer as ArrayBuffer);
   }
 
+  // A copy: some of these chunks' buffers are transferred to the main thread with the result.
+  const { positions: navPositions, indices: navIndices } = concat([...floorChunks, ...solidChunks], false);
+  navInput = { positions: navPositions, indices: navIndices, doors: doorBounds, furniture: furnitureBounds };
+  navToken += 1;
+
   const result: LoadResult = {
     render,
     floor: buildCollision(floorChunks, transfer),
@@ -315,6 +342,7 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
     storeys: readStoreys(modelID, slabs, stairs),
     terrain: [...terrain],
     coordination: Array.from(api.GetCoordinationMatrix(modelID)),
+    navToken,
   };
   return { result, transfer: [...transfer] };
 }
@@ -769,6 +797,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       } else if (request.type === 'render') {
         const rendered = await render(request.standalone);
         post({ type: 'rendered', id: request.id, document: document(), result: rendered.result }, rendered.transfer);
+      } else if (request.type === 'navigation') {
+        const { result, transfer } = await navigation(request.token).catch((error) => {
+          console.warn('navmesh generation failed', error);
+          return { result: { mesh: null }, transfer: [] };
+        });
+        post({ type: 'navigated', id: request.id, result }, transfer);
       } else if (request.type === 'inspect') {
         post({ type: 'inspected', id: request.id, info: await inspect(request.expressID) });
       } else if (request.type === 'query') {

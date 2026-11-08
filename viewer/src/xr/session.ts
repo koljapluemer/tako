@@ -5,7 +5,7 @@ import type { Sample } from '../samples';
 import { Fade } from './fade';
 import { Hud } from './hud';
 import { Inspect } from './inspect';
-import { spawnLanding, storeyLandings, type Landing } from './landing';
+import { navReach, spawnLanding, storeyLandings, type Landing } from './landing';
 import { Menu } from './menu';
 import { headYaw, pointerRay, Teleport, type Destination, type Pointer } from './teleport';
 import { Walking } from './walking';
@@ -207,6 +207,7 @@ export class XRWalk {
     this.teleport.cancel();
     this.walking.setModel(model.collision, model.doorCells);
     this.teleport.setModel(model.collision);
+    this.teleport.reach = null;
     this.inspect.setModel(model.collision, model.doors);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
     this.spawn = spawnLanding(landings);
@@ -226,6 +227,22 @@ export class XRWalk {
       this.walking.lastValid?.add(shift);
     }
     this.revalidate();
+  }
+
+  /** The navmesh arrives after the model; until then teleport works from IFC classes. */
+  setNavigation(model: LoadedModel) {
+    if (model !== this.model || !model.nav) return;
+    this.walking.setNavigation(model.nav);
+    const reach = navReach(model.nav, () => this.feet());
+    this.teleport.reach = reach;
+    const landings = storeyLandings(model.collision, model.storeys, model.terrain, reach);
+    this.spawn = spawnLanding(landings);
+    this.menu.setLandings(landings);
+  }
+
+  private feet() {
+    this.camera.getWorldPosition(head);
+    return new THREE.Vector3(head.x, this.walking.floorY, head.z);
   }
 
   private placeAtSpawn() {

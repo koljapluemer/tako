@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  changeRevision, exportModel, importProject, inspectElement, listProjects, openProject, selectElement,
+  changeRevision, exportModel, importProject, inspectElement, listProjects, loadNavigation, openProject, selectElement,
   executeCommand, queryDocument, type LoadedModel, type OpenedDocument,
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
@@ -71,7 +71,7 @@ let current: LoadedModel | null = null;
 let activeDocument: DocumentSummary | null = null;
 let loading = Promise.resolve();
 
-function disposeModel({ group, collision }: LoadedModel) {
+function disposeModel({ group, collision, nav }: LoadedModel) {
   const mats = new Set<THREE.Material>();
   group.traverse((o) => {
     if (o instanceof THREE.Mesh) {
@@ -82,6 +82,7 @@ function disposeModel({ group, collision }: LoadedModel) {
   });
   mats.forEach((m) => m !== highlightMat && m.dispose());
   collision.dispose();
+  nav?.dispose();
 }
 
 function highlight(model: THREE.Group, ids: number[]) {
@@ -108,6 +109,12 @@ function highlight(model: THREE.Group, ids: number[]) {
   tick();
 }
 
+async function addNavigation(model: LoadedModel) {
+  await loadNavigation(model).catch(console.warn);
+  if (current === model) xr.setNavigation(model);
+  else model.nav?.dispose();
+}
+
 function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boolean) {
   // Serialise loads so rapid edits don't race.
   loading = loading.then(async () => {
@@ -131,7 +138,8 @@ function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boo
       if (change && change.changed.length) highlight(model.group, change.changed);
       const summary = change && change.summary.length > 140 ? `${change.summary.slice(0, 140)}…` : change?.summary;
       const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${document.name}: ${model.group.children.length} draw groups`;
-      setStatus(model.collision.hasFloor ? label : `${label}. No floor elements found, so VR teleport is unavailable`);
+      setStatus(model.collision.hasFloor ? label : `${label}. No floor-class elements: VR relies on generated walkable areas`);
+      void addNavigation(model);
     } catch (err) {
       console.error(err);
       setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
