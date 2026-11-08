@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "three": "^0.187.0",
+    "three-mesh-bvh": "^0.9.18",
     "web-ifc": "^0.0.78"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/three": "^0.187.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.6"
   }

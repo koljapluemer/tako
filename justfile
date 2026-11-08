@@ -30,6 +30,10 @@ setup: fetch-models
 viewer: setup
     cd viewer && npx vite --port {{port}} --strictPort
 
+# Viewer over HTTPS on the LAN, for opening in a headset (WebXR needs a secure context)
+vr: setup
+    cd viewer && TAKO_HTTPS=1 npx vite --host --port {{port}} --strictPort
+
 # Claude Code with the tako-ifc MCP server (start `just viewer` separately)
 chat:
     claude

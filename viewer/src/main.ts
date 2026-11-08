@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { IfcAPI } from 'web-ifc';
+import { loadModel, type LoadedModel } from './model';
+import { XRWalk } from './xr/session';
 
 const statusEl = document.getElementById('status')!;
 const setStatus = (msg: string) => (statusEl.textContent = msg);
@@ -32,70 +33,16 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+const xr = new XRWalk(renderer, scene, camera);
+xr.onExit = (reframe) => {
+  if (reframe && current) frameObject(current.group);
+};
+
 renderer.setAnimationLoop(() => {
-  controls.update();
+  if (xr.presenting) xr.update();
+  else controls.update();
   renderer.render(scene, camera);
 });
-
-// --- IFC loading ----------------------------------------------------------
-const ifcApi = new IfcAPI();
-ifcApi.SetWasmPath('/wasm/');
-const ifcReady = ifcApi.Init(undefined, true); // single-threaded: no COOP/COEP headers needed
-
-async function loadIfc(url: string): Promise<THREE.Group> {
-  await ifcReady;
-
-  setStatus('Downloading IFC…');
-  const data = new Uint8Array(await (await fetch(url, { cache: 'no-store' })).arrayBuffer());
-
-  setStatus('Parsing IFC…');
-  const modelID = ifcApi.OpenModel(data, { COORDINATE_TO_ORIGIN: true });
-
-  const group = new THREE.Group();
-  const materials = new Map<string, THREE.MeshLambertMaterial>();
-  const getMaterial = (c: { x: number; y: number; z: number; w: number }) => {
-    const key = `${c.x},${c.y},${c.z},${c.w}`;
-    let mat = materials.get(key);
-    if (!mat) {
-      mat = new THREE.MeshLambertMaterial({
-        color: new THREE.Color(c.x, c.y, c.z),
-        transparent: c.w < 1,
-        opacity: c.w,
-        side: THREE.DoubleSide,
-        depthWrite: c.w >= 1,
-      });
-      materials.set(key, mat);
-    }
-    return mat;
-  };
-
-  ifcApi.StreamAllMeshes(modelID, (flatMesh) => {
-    const placed = flatMesh.geometries;
-    for (let i = 0; i < placed.size(); i++) {
-      const pg = placed.get(i);
-      const geom = ifcApi.GetGeometry(modelID, pg.geometryExpressID);
-      // Vertex data is interleaved: [px, py, pz, nx, ny, nz] per vertex.
-      const verts = ifcApi.GetVertexArray(geom.GetVertexData(), geom.GetVertexDataSize());
-      const indices = ifcApi.GetIndexArray(geom.GetIndexData(), geom.GetIndexDataSize());
-      geom.delete();
-
-      const interleaved = new THREE.InterleavedBuffer(new Float32Array(verts), 6);
-      const bufferGeom = new THREE.BufferGeometry();
-      bufferGeom.setAttribute('position', new THREE.InterleavedBufferAttribute(interleaved, 3, 0));
-      bufferGeom.setAttribute('normal', new THREE.InterleavedBufferAttribute(interleaved, 3, 3));
-      bufferGeom.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
-
-      const mesh = new THREE.Mesh(bufferGeom, getMaterial(pg.color));
-      mesh.matrixAutoUpdate = false;
-      mesh.matrix.fromArray(pg.flatTransformation);
-      mesh.userData.expressID = flatMesh.expressID;
-      group.add(mesh);
-    }
-  });
-
-  ifcApi.CloseModel(modelID);
-  return group;
-}
 
 function frameObject(obj: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(obj);
@@ -114,18 +61,20 @@ type ModelChange = { rev: number; summary: string; changed: number[] } | null;
 const highlightMat = new THREE.MeshLambertMaterial({
   color: 0xff8a1f, emissive: 0x7a3300, side: THREE.DoubleSide,
 });
-let current: THREE.Group | null = null;
+let current: LoadedModel | null = null;
 let loading = Promise.resolve();
 
-function disposeModel(g: THREE.Group) {
+function disposeModel({ group, collision }: LoadedModel) {
   const mats = new Set<THREE.Material>();
-  g.traverse((o) => {
+  group.traverse((o) => {
     if (o instanceof THREE.Mesh) {
       o.geometry.dispose();
       mats.add(o.material as THREE.Material);
+      if (o.userData.baseMaterial) mats.add(o.userData.baseMaterial as THREE.Material);
     }
   });
   mats.forEach((m) => m !== highlightMat && m.dispose());
+  collision.dispose();
 }
 
 function highlight(model: THREE.Group, ids: number[]) {
@@ -142,7 +91,7 @@ function highlight(model: THREE.Group, ids: number[]) {
   const until = performance.now() + 6000;
   const tick = () => {
     const t = performance.now();
-    if (t > until || current !== model) {
+    if (t > until || current?.group !== model) {
       hits.forEach((m) => (m.material = m.userData.baseMaterial));
       return;
     }
@@ -157,19 +106,23 @@ function reload(change: ModelChange, refocus: boolean) {
   loading = loading.then(async () => {
     setStatus(change ? `Loading rev ${change.rev}…` : 'Loading…');
     try {
-      const model = await loadIfc('/model.ifc');
-      scene.add(model);
-      model.updateMatrixWorld(true);
-      if (current) {
-        scene.remove(current);
-        disposeModel(current);
-      }
-      current = model;
-      if (refocus) frameObject(model);
-      if (change && change.changed.length) highlight(model, change.changed);
+      const model = await loadModel('/model.ifc', change?.changed ?? [], setStatus);
+      await xr.swap(() => {
+        const previous = current;
+        scene.add(model.group);
+        model.group.updateMatrixWorld(true);
+        current = model;
+        xr.setModel(model, refocus);
+        if (previous) {
+          scene.remove(previous.group);
+          disposeModel(previous);
+        }
+      });
+      if (refocus && !xr.presenting) frameObject(model.group);
+      if (change && change.changed.length) highlight(model.group, change.changed);
       const summary = change && change.summary.length > 140 ? `${change.summary.slice(0, 140)}…` : change?.summary;
-      const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${model.children.length} meshes`;
-      setStatus(label);
+      const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${model.group.children.length} draw groups`;
+      setStatus(model.collision.hasFloor ? label : `${label}. No floor elements found, so VR teleport is unavailable`);
     } catch (err) {
       console.error(err);
       setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -213,4 +166,9 @@ if (import.meta.hot) {
       reload(msg.change, false);
     }
   });
+}
+
+if (import.meta.env.DEV) {
+  // Test hook: lets browser automation read renderer stats and drive the session.
+  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current } });
 }

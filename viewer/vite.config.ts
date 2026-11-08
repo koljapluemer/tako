@@ -1,3 +1,4 @@
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig, type Plugin } from 'vite';
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, watch, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -124,5 +125,6 @@ export default defineConfig({
   optimizeDeps: { exclude: ['web-ifc'] },
   // Edits to the working copies must not trigger a full page reload.
   server: { watch: { ignored: [`${workRoot}/**`] } },
-  plugins: [takoModel()],
+  // WebXR needs a secure context; a headset on the LAN can't use http://localhost.
+  plugins: [takoModel(), ...(process.env.TAKO_HTTPS ? [basicSsl()] : [])],
 });

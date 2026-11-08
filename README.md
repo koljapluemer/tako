@@ -35,6 +35,21 @@ Then ask Claude things like *"change the material of the north wall to concrete"
 or *"make the main door 30 cm wider"*. The viewer reloads and highlights what
 changed. *"undo that"* reverts it.
 
+## Walk through it in VR
+
+The viewer has an **Enter VR** button on any WebXR headset. WebXR needs a secure
+context, so run `just vr` and open `https://<this machine's IP>:5173` in the
+headset, accepting the self-signed certificate. On Quest, `adb reverse tcp:5173 tcp:5173`
+with `just viewer` works too. `just vr` exposes the viewer, including its
+`/select-model` endpoint, to your LAN.
+
+- **Walk:** physically. Floors and stairs are followed as you go. Walls fade the view instead of stopping you.
+- **Teleport**, when the building is bigger than the room: hold the trigger or a pinch, aim the arc, release. With a thumbstick, push it forward to aim and rotate it to choose which way you'll face. Cyan means you can land there, red means you can't.
+- **Menu:** the small button at waist height lists the storeys.
+- **Inspect:** tap on an element to see its class, material and key properties.
+
+Edits made through Claude show up while you are in VR, and you stay where you are.
+
 ## How it works
 
 - **The viewer and the server share the selected model** through
