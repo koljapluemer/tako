@@ -8,10 +8,14 @@ import {
 
 export type DoorInfo = { mesh: THREE.Mesh; box: THREE.Box3; material: THREE.MeshLambertMaterial; baseOpacity: number };
 
+/** One cell's doors: far away the merged meshes draw them in one call; up close the individual ones can fade. */
+export type DoorCell = { merged: THREE.Mesh[]; doors: DoorInfo[]; box: THREE.Box3; near: boolean | null };
+
 export type LoadedModel = {
   group: THREE.Group;
   collision: Collision;
   doors: DoorInfo[];
+  doorCells: DoorCell[];
   storeys: StoreyInfo[];
   terrain: Set<number>;
   coordination: number[];
@@ -71,6 +75,12 @@ function build(result: LoadResult): LoadedModel {
     });
 
   const doors: DoorInfo[] = [];
+  const cells = new Map<string, DoorCell>();
+  const cellOf = (key: string) => {
+    let cell = cells.get(key);
+    if (!cell) cells.set(key, (cell = { merged: [], doors: [], box: new THREE.Box3(), near: null }));
+    return cell;
+  };
   for (const part of result.render) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
@@ -94,7 +104,17 @@ function build(result: LoadResult): LoadedModel {
 
     if (part.door) {
       geometry.computeBoundingBox();
-      doors.push({ mesh, box: geometry.boundingBox!.clone(), material, baseOpacity: part.color[3] });
+      const door = { mesh, box: geometry.boundingBox!.clone(), material, baseOpacity: part.color[3] };
+      doors.push(door);
+      if (part.doorCell != null) {
+        const cell = cellOf(part.doorCell);
+        cell.doors.push(door);
+        cell.box.union(door.box);
+      }
+    } else if (part.doorCell != null) {
+      // Desktop draws individual doors for picking and highlighting; VR turns these on.
+      mesh.visible = false;
+      cellOf(part.doorCell).merged.push(mesh);
     }
   }
 
@@ -102,6 +122,7 @@ function build(result: LoadResult): LoadedModel {
     group,
     collision: new Collision(result.floor, result.solid),
     doors,
+    doorCells: [...cells.values()],
     storeys: result.storeys,
     terrain: new Set(result.terrain),
     coordination: result.coordination,

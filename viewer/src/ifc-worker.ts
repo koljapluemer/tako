@@ -2,6 +2,7 @@
 // Parses IFC off the main thread: a stalled frame in a headset is physically unpleasant.
 import { BufferAttribute, BufferGeometry, Matrix3, Matrix4, Vector3 } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
+import { cellKey } from './render-cells';
 import {
   IFCBUILDINGSTOREY, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
   IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE,
@@ -201,6 +202,7 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
 
   const standalone = new Set(standaloneIds);
   const batches = new Map<string, { color: Rgba; chunks: Chunk[] }>();
+  const doorBatches = new Map<string, { color: Rgba; cell: string; chunks: Chunk[] }>();
   const single: RenderPart[] = [];
   const floorChunks: Chunk[] = [];
   const solidChunks: Chunk[] = [];
@@ -225,10 +227,17 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
       const chunk = bake(verts, indices, Array.from(pg.flatTransformation), expressID);
       const color: Rgba = [pg.color.x, pg.color.y, pg.color.z, pg.color.w];
 
+      const cell = cellKey(chunk.positions);
       if (door || standalone.has(expressID)) {
-        single.push({ color, positions: chunk.positions, normals: chunk.normals, indices: chunk.indices, expressID, door });
+        single.push({ color, positions: chunk.positions, normals: chunk.normals, indices: chunk.indices, expressID, door, doorCell: door ? cell : null });
+        if (door) {
+          const key = `${color.join(',')}|${cell}`;
+          let batch = doorBatches.get(key);
+          if (!batch) doorBatches.set(key, (batch = { color, cell, chunks: [] }));
+          batch.chunks.push(chunk);
+        }
       } else {
-        const key = color.join(',');
+        const key = `${color.join(',')}|${cell}`;
         let batch = batches.get(key);
         if (!batch) batches.set(key, (batch = { color, chunks: [] }));
         batch.chunks.push(chunk);
@@ -287,9 +296,12 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   post({ type: 'progress', message: 'Preparing model…' });
   const transfer = new Set<ArrayBuffer>();
   const render: RenderPart[] = [...batches.values()].map(({ color, chunks }) => ({
-    color, ...concat(chunks, true), expressID: null, door: false,
+    color, ...concat(chunks, true), expressID: null, door: false, doorCell: null,
   }));
   render.push(...single);
+  for (const { color, cell, chunks } of doorBatches.values()) {
+    render.push({ color, ...concat(chunks, true), expressID: null, door: false, doorCell: cell });
+  }
   for (const part of render) {
     transfer.add(part.positions.buffer as ArrayBuffer);
     transfer.add(part.normals.buffer as ArrayBuffer);

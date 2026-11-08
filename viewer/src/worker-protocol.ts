@@ -13,6 +13,8 @@ export type RenderPart = {
   /** Set on standalone meshes only; merged batches hold many elements. */
   expressID: number | null;
   door: boolean;
+  /** Spatial cell of a door: set on individual doors and on the merged batch that stands in for them at a distance. */
+  doorCell: string | null;
 };
 
 export type CollisionPart = {

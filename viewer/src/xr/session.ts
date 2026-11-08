@@ -205,7 +205,7 @@ export class XRWalk {
     const before = this.model;
     this.model = model;
     this.teleport.cancel();
-    this.walking.setModel(model.collision, model.doors);
+    this.walking.setModel(model.collision, model.doorCells);
     this.teleport.setModel(model.collision);
     this.inspect.setModel(model.collision, model.doors);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);

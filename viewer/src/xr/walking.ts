@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Collision } from '../collision';
-import type { DoorInfo } from '../model';
+import type { DoorCell, DoorInfo } from '../model';
 import type { Fade } from './fade';
 import { STEP } from './landing';
 
@@ -25,7 +25,7 @@ const toHead = new THREE.Vector3();
  */
 export class Walking {
   private collision: Collision | null = null;
-  private doors: DoorInfo[] = [];
+  private doorCells: DoorCell[] = [];
   private lastClear: THREE.Vector3 | null = null;
   private blockedFor = 0;
   private offFloorFor = 0;
@@ -35,10 +35,10 @@ export class Walking {
 
   constructor(private rig: THREE.Group, private camera: THREE.Camera, private fade: Fade) {}
 
-  setModel(collision: Collision, doors: DoorInfo[]) {
+  setModel(collision: Collision, doorCells: DoorCell[]) {
     this.restoreDoors();
     this.collision = collision;
-    this.doors = doors;
+    this.doorCells = doorCells;
     this.lastClear = null;
   }
 
@@ -65,9 +65,9 @@ export class Walking {
 
   private inDoorway(x: number, z: number) {
     const margin = 0.2;
-    return this.doors.some(({ box }) =>
+    return this.doorCells.some((cell) => cell.doors.some(({ box }) =>
       x > box.min.x - margin && x < box.max.x + margin && z > box.min.z - margin && z < box.max.z + margin
-      && this.floorY + 1 > box.min.y && this.floorY < box.max.y);
+      && this.floorY + 1 > box.min.y && this.floorY < box.max.y));
   }
 
   private updateFloor(dt: number): boolean {
@@ -124,11 +124,26 @@ export class Walking {
   }
 
   private updateDoors() {
-    for (const door of this.doors) {
-      const d = door.box.distanceToPoint(head);
-      const k = 0.15 + 0.85 * THREE.MathUtils.smoothstep(d, DOOR_FADE_NEAR, DOOR_FADE_FAR);
-      this.setDoorOpacity(door, door.baseOpacity * k);
+    for (const cell of this.doorCells) {
+      // Beyond the fade range every door is at full opacity, so the swap can't be seen.
+      const near = cell.box.distanceToPoint(head) < DOOR_FADE_FAR;
+      if (near !== cell.near) this.setCellNear(cell, near);
+      if (!near) continue;
+      for (const door of cell.doors) {
+        const d = door.box.distanceToPoint(head);
+        const k = 0.15 + 0.85 * THREE.MathUtils.smoothstep(d, DOOR_FADE_NEAR, DOOR_FADE_FAR);
+        this.setDoorOpacity(door, door.baseOpacity * k);
+      }
     }
+  }
+
+  private setCellNear(cell: DoorCell, near: boolean) {
+    cell.near = near;
+    cell.merged.forEach((mesh) => (mesh.visible = !near));
+    cell.doors.forEach((door) => {
+      door.mesh.visible = near;
+      if (!near) this.setDoorOpacity(door, door.baseOpacity);
+    });
   }
 
   private setDoorOpacity({ material, baseOpacity }: DoorInfo, opacity: number) {
@@ -139,7 +154,12 @@ export class Walking {
   }
 
   restoreDoors() {
-    this.doors.forEach((d) => this.setDoorOpacity(d, d.baseOpacity));
+    for (const cell of this.doorCells) {
+      // Back to the desktop arrangement; the next VR frame re-evaluates each cell.
+      this.setCellNear(cell, true);
+      cell.near = null;
+      cell.doors.forEach((d) => this.setDoorOpacity(d, d.baseOpacity));
+    }
   }
 
   update(dt: number) {
