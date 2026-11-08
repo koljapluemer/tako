@@ -54,7 +54,12 @@ fetch-models:
 check: setup
     cd viewer && npx tsc --noEmit
     uv run --quiet --directory server python -c "import tako_ifc_mcp.server"
+    uv run --quiet --directory server pytest -q
     @echo ok
+
+# Run the edit benchmark through the Claude CLI (see server/benchmarks/run.py)
+bench *args: setup
+    uv run --quiet --directory server python benchmarks/run.py {{args}}
 
 # Production build of the viewer
 build: setup

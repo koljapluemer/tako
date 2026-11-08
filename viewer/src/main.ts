@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { loadModel, type LoadedModel } from './model';
+import { inspectElement, loadModel, type LoadedModel } from './model';
 import { XRWalk } from './xr/session';
 
 const statusEl = document.getElementById('status')!;
@@ -118,6 +118,7 @@ function reload(change: ModelChange, refocus: boolean) {
           disposeModel(previous);
         }
       });
+      if (refocus) selectionMarker.visible = false;
       if (refocus && !xr.presenting) frameObject(model.group);
       if (change && change.changed.length) highlight(model.group, change.changed);
       const summary = change && change.summary.length > 140 ? `${change.summary.slice(0, 140)}…` : change?.summary;
@@ -129,6 +130,60 @@ function reload(change: ModelChange, refocus: boolean) {
     }
   });
 }
+
+// --- click to select: tells Claude what "this" means --------------------------
+const selectionMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.12, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0x35d0ff, depthTest: false, transparent: true, opacity: 0.9 }),
+);
+selectionMarker.renderOrder = 10;
+selectionMarker.visible = false;
+scene.add(selectionMarker);
+
+const CLICK_TOLERANCE_PX = 5;
+const pickRay = new THREE.Raycaster();
+let pressedAt: { x: number; y: number } | null = null;
+
+function pick(event: PointerEvent, model: LoadedModel) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pointer = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  pickRay.setFromCamera(pointer, camera);
+  const hit = model.collision.raycast(pickRay.ray, camera.far);
+  pickRay.far = hit ? hit.distance : camera.far;
+  const door = pickRay.intersectObjects(model.doors.map((d) => d.mesh), false)[0];
+  if (door) return { point: door.point, expressID: door.object.userData.expressID as number };
+  return hit && { point: hit.point, expressID: hit.expressID };
+}
+
+function postSelection(expressID: number | null) {
+  return fetch('/select-element', { method: 'POST', body: JSON.stringify({ expressID }) });
+}
+
+async function select(event: PointerEvent) {
+  if (!current || xr.presenting) return;
+  const picked = pick(event, current);
+  selectionMarker.visible = picked != null;
+  if (!picked) {
+    await postSelection(null);
+    setStatus('Selection cleared');
+    return;
+  }
+  selectionMarker.position.copy(picked.point);
+  await postSelection(picked.expressID);
+  const info = await inspectElement(picked.expressID).catch(() => null);
+  setStatus(`Selected #${picked.expressID}${info ? `: ${info.ifcClass} ${info.name ?? ''}` : ''}`);
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => (pressedAt = { x: e.clientX, y: e.clientY }));
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (pressedAt && Math.hypot(e.clientX - pressedAt.x, e.clientY - pressedAt.y) <= CLICK_TOLERANCE_PX) {
+    void select(e);
+  }
+  pressedAt = null;
+});
 
 // --- model picker -----------------------------------------------------------
 const picker = document.getElementById('model') as HTMLSelectElement;

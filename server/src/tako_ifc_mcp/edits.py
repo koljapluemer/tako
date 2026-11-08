@@ -128,6 +128,35 @@ def _set_quantity(f, el, names: tuple[str, ...], value: float, changed: list) ->
                 q.LengthValue = float(value) / unit_scale(f)
 
 
+def clearance_problems(host, opening, x_world: np.ndarray, z_world: np.ndarray,
+                       lo: float, hi: float, z_lo: float, z_hi: float,
+                       verts=_world_verts) -> list[str]:
+    """Why a filling spanning [lo, hi] along x_world and [z_lo, z_hi] along z_world
+    doesn't fit in `host`: past the end of the wall, or over another opening.
+    `verts` lets callers checking many elements cache the geometry."""
+    problems = []
+    hw = verts(host) @ x_world
+    if lo < hw.min() - 1e-3 or hi > hw.max() + 1e-3:
+        problems.append(f"new extent [{lo:.2f}, {hi:.2f}] exceeds host wall #{host.id()} [{hw.min():.2f}, {hw.max():.2f}]")
+    for vr in host.HasOpenings or ():
+        o = vr.RelatedOpeningElement
+        if o == opening:
+            continue
+        try:
+            wv = verts(o)
+        except Exception:  # noqa: BLE001
+            continue
+        # Only openings at overlapping heights can collide.
+        zs = wv @ z_world
+        if zs.max() < z_lo or zs.min() > z_hi:
+            continue
+        olo, ohi = (wv @ x_world).min(), (wv @ x_world).max()
+        if olo < hi - 1e-3 and ohi > lo + 1e-3:
+            fill = [r.RelatedBuildingElement for r in (o.HasFillings or ())]
+            problems.append(f"overlaps opening #{o.id()}" + (f" (filled by #{fill[0].id()} {fill[0].Name})" if fill else ""))
+    return problems
+
+
 # ----------------------------------------------------------------------------
 # resize door / window
 # ----------------------------------------------------------------------------
@@ -175,27 +204,8 @@ def resize_filling(f, el, width: float | None, height: float | None, anchor: str
         new_lo = anchor_world @ x_world + (mn[0] - ax) * (cur_w + dw) / cur_w
         new_hi = anchor_world @ x_world + (mx[0] - ax) * (cur_w + dw) / cur_w
         lo, hi = sorted((new_lo, new_hi))
-        hw = _world_verts(host) @ x_world
-        problems = []
-        if lo < hw.min() - 1e-3 or hi > hw.max() + 1e-3:
-            problems.append(f"new extent [{lo:.2f}, {hi:.2f}] exceeds host wall #{host.id()} [{hw.min():.2f}, {hw.max():.2f}]")
-        for vr in host.HasOpenings or ():
-            o = vr.RelatedOpeningElement
-            if o == opening:
-                continue
-            try:
-                wv = _world_verts(o)
-            except Exception:  # noqa: BLE001
-                continue
-            # Only openings at overlapping heights can collide.
-            zs = wv @ z_world
-            ez = (m_el @ np.append(mn, 1))[:3] @ z_world
-            if zs.max() < ez or zs.min() > ez + cur_h + dh:
-                continue
-            olo, ohi = (wv @ x_world).min(), (wv @ x_world).max()
-            if olo < hi - 1e-3 and ohi > lo + 1e-3:
-                fill = [r.RelatedBuildingElement for r in (o.HasFillings or ())]
-                problems.append(f"overlaps opening #{o.id()}" + (f" (filled by #{fill[0].id()} {fill[0].Name})" if fill else ""))
+        ez = (m_el @ np.append(mn, 1))[:3] @ z_world
+        problems = clearance_problems(host, opening, x_world, z_world, lo, hi, ez, ez + cur_h + dh)
         if problems and not force:
             raise EditError("clearance check failed: " + "; ".join(problems) + ". Pass force=true to apply anyway, or pick another anchor.")
         warnings += problems

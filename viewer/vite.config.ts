@@ -106,6 +106,31 @@ function takoModel(): Plugin {
         });
       });
 
+      server.middlewares.use('/select-element', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          return res.end();
+        }
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          try {
+            const id = JSON.parse(body || '{}').expressID ?? null;
+            if (id !== null && !Number.isInteger(id)) {
+              res.statusCode = 400;
+              return res.end('expressID must be an integer or null');
+            }
+            const dir = modelWorkDir(selectedModel());
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(join(dir, 'selection.json'), JSON.stringify({ expressID: id }));
+            res.end('ok');
+          } catch (err) {
+            res.statusCode = 500;
+            res.end(String(err));
+          }
+        });
+      });
+
       // Watch the whole work root (files are replaced atomically, which breaks
       // per-file watchers). last_change.json is written after current.ifc.
       watch(workRoot, { recursive: true }, (_ev, name) => {

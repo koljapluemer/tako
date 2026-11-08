@@ -8,7 +8,9 @@ Layout of the work root (default <repo>/work):
     current.ifc          the file the viewer watches
     revisions/0000.ifc   pristine copy of the source model
     revisions/NNNN.ifc   state after edit N
-    history.json         [{rev, summary, changed: [expressID, ...]}]
+    history.json         [{rev, summary, changed: [expressID, ...], edit_id, recipe, params, targets, rev_before}]
+    selection.json       {"expressID": n}: what is selected in the viewer
+    edits/<edit_id>.py   code of edits made by script, for revise_edit
     last_change.json     what the most recent edit touched (viewer highlights it)
 """
 
@@ -112,6 +114,14 @@ class Session:
         return self.rev_dir / f"{rev:04d}.ifc"
 
     @property
+    def selection_path(self) -> Path:
+        return self.workdir / "selection.json"
+
+    @property
+    def edits_dir(self) -> Path:
+        return self.workdir / "edits"
+
+    @property
     def history_path(self) -> Path:
         return self.workdir / "history.json"
 
@@ -144,11 +154,22 @@ class Session:
     def rev(self) -> int:
         return self.history[-1]["rev"] if self.history else 0
 
-    def commit(self, summary: str, changed: list[int]) -> int:
-        """Persist the in-memory model as a new revision and notify the viewer."""
-        rev = self.rev + 1
+    def commit(self, summary: str, changed: list[int], edit: dict | None = None, replace_last: bool = False) -> int:
+        """Persist the in-memory model as a revision and notify the viewer.
+
+        `edit` records how to redo it. With replace_last the latest revision is
+        overwritten in place, so one undo still goes back past the whole edit."""
+        record = dict(edit or {})
+        if replace_last:
+            last = self.history.pop()
+            rev = last["rev"]
+            changed = [*changed, *last["changed"]]
+            record["edit_id"] = last["edit_id"]
+        else:
+            rev = self.rev + 1
+            record["edit_id"] = f"e{rev}"
         self.model.write(str(self._rev_path(rev)))
-        self.history.append({"rev": rev, "summary": summary, "changed": sorted(set(changed)), "time": time.time()})
+        self.history.append({"rev": rev, "summary": summary, "changed": sorted(set(changed)), "time": time.time(), **record})
         self._write_history()
         self._publish(changed=changed, summary=summary)
         self.generation += 1
@@ -168,6 +189,15 @@ class Session:
         self._publish(changed=changed, summary=f"undo: {', '.join(h['summary'] for h in undone)}")
         self.generation += 1
         return {"ok": True, "undone": [h["summary"] for h in undone], "now_at_revision": self.rev}
+
+    def open_revision(self, rev: int) -> None:
+        """Load an older revision for re-applying an edit. Not published; reload() returns to the latest."""
+        self.model = ifcopenshell.open(str(self._rev_path(rev)))
+
+    def reload(self) -> None:
+        """Discard unsaved in-memory changes. The content matches the current
+        revision again, so caches keyed on `generation` stay valid."""
+        self.model = ifcopenshell.open(str(self._rev_path(self.rev)))
 
     # -- internals -----------------------------------------------------------
     def _write_history(self) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import threading
 import traceback
@@ -15,7 +16,8 @@ import ifcopenshell.api
 import ifcopenshell.util.element as ue
 from mcp.server.mcpserver import MCPServer
 
-from . import edits
+from . import edits, kit, kit_docs, verify
+from .recipes import RECIPES, Recipe
 from .session import REPO_ROOT, Session
 from .spatial import SpatialIndex
 
@@ -40,8 +42,13 @@ How to work:
 3. Edit with the dedicated tools. Material names in the file may be in another
    language: call list_materials and map the user's word (e.g. concrete ->
    'Stahlbeton'/'Beton') yourself before creating a new material.
-4. Tell the user what changed, including warnings. undo reverts.
-Use run_ifcopenshell only when no dedicated tool fits.
+   Prefer add_window, add_door and set_window_panels for openings.
+4. For a follow-up on the latest edit ("no, only the left side"), call revise_edit with
+   just the changed parameters. For "this" or "it", call get_focus.
+5. Tell the user what changed, including warnings and any `verify` problems. undo reverts.
+Use run_ifcopenshell only when no dedicated tool fits. Before writing a script, use
+context_around to see what surrounds a place, and kit_help for tested building blocks
+and worked examples: `kit` and the spatial index `si` are available inside scripts.
 """
 
 mcp = MCPServer("tako-ifc", instructions=INSTRUCTIONS)
@@ -66,6 +73,8 @@ def index() -> SpatialIndex:
     with _index_lock:
         if _index is None or _index[0] != s.generation:
             _index = (s.generation, SpatialIndex(s.model))
+        elif _index[1].f is not s.model:
+            _index[1].f = s.model  # reopened at the same revision: facts still hold
         return _index[1]
 
 
@@ -76,34 +85,59 @@ def _resolve(ref: str):
         raise ValueError(f"no element {ref!r}: {e}") from e
 
 
-def _rollback(s: Session) -> None:
-    s.model = ifcopenshell.open(str(s._rev_path(s.rev)))  # discard partial changes
-    s.generation += 1
+def _handle(entry: dict) -> dict:
+    """What a follow-up needs to refer to and change this edit."""
+    recipe = RECIPES.get(entry.get("recipe", ""))
+    return {
+        "edit_id": entry.get("edit_id"), "recipe": entry.get("recipe"), "params": entry.get("params"),
+        "targets": entry.get("targets"), "revisable": list(recipe.schema) if recipe else "PARAMS, or text replacements in the script",
+    }
 
 
-def _apply(fn, *args) -> dict:
-    """Run one edit; commit on success, roll back to the last revision on failure."""
-    return _apply_many([(fn, args)])
+def _run_recipe(s: Session, recipe: Recipe, targets: list, params: dict, rev_before: int, replace_last: bool = False) -> dict:
+    """Apply a recipe and commit it, or leave the latest revision as it was."""
+    try:
+        result = recipe.apply(s.model, targets, params, index())
+    except Exception as e:  # noqa: BLE001
+        s.reload()
+        return {"ok": False, "error": str(e) if isinstance(e, edits.EditError) else f"{type(e).__name__}: {e}"}
+    check = verify.check_elements(s.model, result["changed"])
+    if recipe.enforce_verify and not check["ok"] and not params.get("force"):
+        s.reload()
+        return {"ok": False, "error": "verification failed, so nothing was applied. Change the parameters, or pass force=true after asking the user.", "verify": check}
+    edit = {"recipe": recipe.name, "params": params, "targets": [t.GlobalId for t in targets], "rev_before": rev_before}
+    rev = s.commit(result["summary"], result["changed"], edit, replace_last)
+    return {"ok": True, "revision": rev, "summary": result["summary"], "changed": [f"#{i}" for i in dict.fromkeys(result["changed"])],
+            "warnings": result["warnings"], "verify": check, "edit": _handle(s.history[-1])}
 
 
-def _apply_many(calls: list[tuple]) -> dict:
-    """Run several edits as one revision (one undo step). All or nothing."""
+def _apply_recipe(recipe_name: str, refs: list[str], /, **params: Any) -> dict:
     s = session()
-    results = []
-    for fn, args in calls:
-        try:
-            el = args[0]
-            results.append(fn(s.model, *args))
-        except Exception as e:  # noqa: BLE001
-            _rollback(s)
-            msg = str(e) if isinstance(e, edits.EditError) else f"{type(e).__name__}: {e}"
-            where = f" (on #{el.id()}; no changes were applied)" if len(calls) > 1 else ""
-            return {"ok": False, "error": msg + where}
-    changed = [i for r in results for i in r["changed"]]
-    summary = "; ".join(r["summary"] for r in results)
-    rev = s.commit(summary, changed)
-    return {"ok": True, "revision": rev, "summary": summary, "changed": [f"#{i}" for i in dict.fromkeys(changed)],
-            "warnings": [w for r in results for w in r["warnings"]]}
+    targets = [_resolve(ref) for ref in refs]
+    given = {k: v for k, v in params.items() if v is not None and not (k == "force" and not v)}
+    return _run_recipe(s, RECIPES[recipe_name], targets, given, s.rev)
+
+
+def _execute(s: Session, code: str, params: dict) -> tuple[dict | None, str, str | None]:
+    """Run script code against the open model. Returns (namespace, output, traceback)."""
+    ns: dict[str, Any] = {"f": s.model, "si": index(), "kit": kit, "PARAMS": params, "ifcopenshell": ifcopenshell, "api": ifcopenshell.api, "ue": ue, "changed": []}
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile(code, "<run_ifcopenshell>", "exec"), ns)  # noqa: S102
+    except Exception:  # noqa: BLE001
+        return None, buf.getvalue(), traceback.format_exc(limit=3)
+    return ns, buf.getvalue(), None
+
+
+def _commit_script(s: Session, code: str, summary: str, params: dict, ns: dict, output: str, rev_before: int, replace_last: bool = False) -> dict:
+    changed = [int(c) for c in ns.get("changed") or []]
+    check = verify.check_elements(s.model, changed)
+    edit = {"recipe": "script", "params": params, "targets": [], "rev_before": rev_before}
+    rev = s.commit(summary, changed, edit, replace_last)
+    s.edits_dir.mkdir(parents=True, exist_ok=True)
+    (s.edits_dir / f"{s.history[-1]['edit_id']}.py").write_text(code)
+    return {"ok": True, "output": output[-8000:], "revision": rev, "changed": [f"#{c}" for c in changed], "verify": check, "edit": _handle(s.history[-1])}
 
 
 # ----------------------------------------------------------------------------
@@ -180,6 +214,19 @@ def get_element(element: str) -> dict:
 
 
 @mcp.tool()
+def context_around(target: str, radius: float = 3.0, limit: int = 40) -> dict:
+    """What surrounds an element or room, in one call: the room it is in, neighbouring
+    rooms, and nearby walls, doors, windows, slabs and stairs. Use before writing
+    inspection scripts.
+
+    target: '#id', GlobalId, or a room's name, number or long name.
+    radius: metres of clearance to search around the target's bounding box.
+    limit: maximum nearby elements; the result says how many more there were.
+    """
+    return index().context_around(target, radius, limit)
+
+
+@mcp.tool()
 def list_materials() -> list[dict]:
     """All IfcMaterials in the model with usage counts and display colour."""
     return edits.material_overview(session().model)
@@ -208,8 +255,8 @@ def set_material(
     create_if_missing: create a new IfcMaterial if no such name exists.
     category: IFC material category for a newly created material (e.g. 'concrete').
     """
-    return _apply_many([(edits.set_material, (_resolve(ref), material, layer_index, color, create_if_missing, category))
-                        for ref in elements])
+    return _apply_recipe("set_material", elements, material=material, layer_index=layer_index, color=color,
+                         create_if_missing=create_if_missing, category=category)
 
 
 @mcp.tool()
@@ -228,44 +275,159 @@ def resize_door_or_window(
     force: apply even if the clearance check fails (overlap with other
         openings or exceeding the wall). Ask the user before using this.
     """
-    return _apply(edits.resize_filling, _resolve(element), width, height, anchor, force)
+    return _apply_recipe("resize_door_or_window", [element], width=width, height=height, anchor=anchor, force=force)
 
 
 @mcp.tool()
 def set_property(element: str, pset: str, name: str, value: str | float | int | bool) -> dict:
     """Set one property, e.g. pset='Pset_WallCommon', name='FireRating', value='F90'."""
-    return _apply(edits.set_property, _resolve(element), pset, name, value)
+    return _apply_recipe("set_property", [element], pset=pset, name=name, value=value)
 
 
 @mcp.tool()
-def run_ifcopenshell(code: str, summary: str, commit: bool = True) -> dict:
+def set_window_panels(windows: list[str], panels: list[dict], force: bool = False) -> dict:
+    """Rebuild windows with the given panels, keeping their size and position. One revision.
+
+    panels: [{"pos": "left"|"center"|"right", "kind": "fixed"|"sliding"|"casement"}, ...], 1 to 3.
+    The result says which compass end is left. To change only one side later, use revise_edit.
+    force: apply even if verification fails. Ask the user first.
+    """
+    return _apply_recipe("set_window_panels", windows, panels=panels, force=force)
+
+
+@mcp.tool()
+def add_window(
+    wall: str,
+    width: float,
+    height: float,
+    sill: float = 0.9,
+    along: float | None = None,
+    panels: list[dict] | None = None,
+    force: bool = False,
+) -> dict:
+    """Cut an opening in a wall and fill it with a new window.
+
+    sill: metres above the wall's base.
+    along: centre, metres from the wall's start. Omit to use the widest free stretch.
+    panels: as in set_window_panels. Default: one casement panel.
+    force: apply even if verification fails. Ask the user first.
+    """
+    return _apply_recipe("add_window", [wall], width=width, height=height, sill=sill, along=along,
+                         panels=panels or [{"pos": "center", "kind": "casement"}], force=force)
+
+
+@mcp.tool()
+def add_door(wall: str, width: float = 0.9, height: float = 2.1, along: float | None = None, like: str | None = None, force: bool = False) -> dict:
+    """Cut a floor-level opening in a wall and fill it with a new plain door.
+
+    along: centre, metres from the wall's start. Omit to use the widest free stretch.
+    like: an existing door whose look to copy.
+    force: apply even if verification fails. Ask the user first.
+    """
+    return _apply_recipe("add_door", [wall], width=width, height=height, along=along, like=like, force=force)
+
+
+@mcp.tool()
+def revise_edit(edit_id: str, params: dict | None = None, replacements: list[dict] | None = None) -> dict:
+    """Redo the latest edit with changes, instead of undoing and starting over. It stays
+    one undo step. Use this for follow-ups like "only the left side" or "make it wider".
+
+    edit_id: from the `edit` field of the edit's result, or get_focus.
+    params: parameters to change; others keep their values.
+    replacements: for script edits only, [{"old": "...", "new": "..."}]; each old text must occur exactly once.
+    """
+    s = session()
+    last = s.history[-1] if s.history else None
+    if last is None or last.get("edit_id") != edit_id:
+        latest = last.get("edit_id") if last else "none"
+        return {"ok": False, "error": f"only the latest edit can be revised (latest: {latest}). Undo back to it, or make a new edit."}
+    merged = {**last["params"], **(params or {})}
+    if last["recipe"] == "script":
+        return _revise_script(s, last, merged, replacements or [])
+    if replacements:
+        return {"ok": False, "error": "replacements only apply to script edits; pass params"}
+    s.open_revision(last["rev_before"])
+    try:
+        targets = [s.model.by_guid(g) for g in last["targets"]]
+    except RuntimeError as e:
+        s.reload()
+        return {"ok": False, "error": f"a target no longer exists: {e}"}
+    return _run_recipe(s, RECIPES[last["recipe"]], targets, merged, last["rev_before"], replace_last=True)
+
+
+def _revise_script(s: Session, last: dict, params: dict, replacements: list[dict]) -> dict:
+    code = (s.edits_dir / f"{last['edit_id']}.py").read_text()
+    for r in replacements:
+        if code.count(r["old"]) != 1:
+            return {"ok": False, "error": f"text occurs {code.count(r['old'])} times, expected once: {r['old'][:80]!r}"}
+        code = code.replace(r["old"], r["new"])
+    s.open_revision(last["rev_before"])
+    s.generation += 1  # scripts may read `si`, which must describe the older revision
+    ns, output, error = _execute(s, code, params)
+    if ns is None:
+        s.reload()
+        s.generation += 1
+        return {"ok": False, "output": output[-4000:], "error": error[-4000:]}
+    return _commit_script(s, code, last["summary"], params, ns, output, last["rev_before"], replace_last=True)
+
+
+@mcp.tool()
+def get_focus() -> dict:
+    """What the user means by "this" or "it": the element selected in the viewer and the latest edit."""
+    s = session()
+    si = index()
+    out: dict[str, Any] = {"selection": None, "latest_edit": None}
+    try:
+        selected = json.loads(s.selection_path.read_text())["expressID"]
+    except (OSError, ValueError, KeyError):
+        selected = None
+    if selected is not None:
+        if selected in si.facts:
+            out["selection"] = si.describe(si.facts[selected])
+        else:
+            try:
+                el = s.model.by_id(selected)
+                out["selection"] = {"id": f"#{el.id()}", "class": el.is_a(), "name": getattr(el, "Name", None)}
+            except RuntimeError:
+                out["selection_note"] = f"the selected element #{selected} no longer exists; ask the user to select again"
+    if s.history and "edit_id" in s.history[-1]:
+        out["latest_edit"] = {"summary": s.history[-1]["summary"], **_handle(s.history[-1])}
+    return out
+
+
+@mcp.tool()
+def run_ifcopenshell(code: str, summary: str, commit: bool = True, params: dict | None = None) -> dict:
     """Escape hatch: run Python against the open model for edits no other tool covers.
 
-    Available names: f (ifcopenshell.file), ifcopenshell, api (ifcopenshell.api),
-    ue (ifcopenshell.util.element). Assign a list of changed expressIDs to
+    Available names: f (ifcopenshell.file), si (the SpatialIndex: si.facts[id] has
+    world bbox, storey, exterior, host, ...; si.rooms has the IfcSpaces), kit
+    (building blocks in metres; see kit_help), ifcopenshell, api (ifcopenshell.api), ue (ifcopenshell.util.element). Assign a list of changed expressIDs to
     `changed` so the viewer highlights them. Print to return output.
     The model is rolled back if the code raises. `summary` describes the edit.
+    params: values the code reads from PARAMS. Put sizes and options there, so a
+    follow-up can change them with revise_edit instead of rewriting the script.
     Use commit=False for read-only inspection.
     Runs with full local privileges; keep it to model manipulation.
     """
     s = session()
-    ns: dict[str, Any] = {"f": s.model, "ifcopenshell": ifcopenshell, "api": ifcopenshell.api, "ue": ue, "changed": []}
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            exec(compile(code, "<run_ifcopenshell>", "exec"), ns)  # noqa: S102
-    except Exception:  # noqa: BLE001
-        s.model = ifcopenshell.open(str(s._rev_path(s.rev)))
-        s.generation += 1
-        return {"ok": False, "output": buf.getvalue()[-4000:], "error": traceback.format_exc(limit=3)[-4000:]}
-    changed = [int(c) for c in ns.get("changed") or []]
+    params = params or {}
+    rev_before = s.rev
+    ns, output, error = _execute(s, code, params)
+    if ns is None:
+        s.reload()
+        return {"ok": False, "output": output[-4000:], "error": error[-4000:]}
     if not commit:
-        # Discard anything the code may have touched anyway.
-        s.model = ifcopenshell.open(str(s._rev_path(s.rev)))
-        s.generation += 1
-        return {"ok": True, "output": buf.getvalue()[-8000:], "committed": False}
-    rev = s.commit(summary, changed)
-    return {"ok": True, "output": buf.getvalue()[-8000:], "revision": rev, "changed": [f"#{c}" for c in changed]}
+        s.reload()  # discard anything the code may have touched anyway
+        return {"ok": True, "output": output[-8000:], "committed": False}
+    return _commit_script(s, code, summary, params, ns, output, rev_before)
+
+
+@mcp.tool()
+def kit_help(topic: str | None = None) -> str:
+    """Reference for the `kit` used in run_ifcopenshell. No topic: all functions and
+    example names. A topic: one function's full docs, or a complete worked example.
+    Read the matching example before writing a modelling script."""
+    return kit_docs.help_text(topic)
 
 
 @mcp.tool()

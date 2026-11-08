@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing
+import weakref
 from dataclasses import dataclass, field
 
 import ifcopenshell
@@ -77,6 +78,20 @@ class Facts:
     extras: dict = field(default_factory=dict)
 
 
+@dataclass
+class Room:
+    id: int
+    global_id: str
+    name: str | None
+    long_name: str | None
+    storey: str | None
+    bbox_min: np.ndarray | None = None
+    bbox_max: np.ndarray | None = None
+    neighbours: set[int] = field(default_factory=set)
+    via_door: set[int] = field(default_factory=set)
+    elements: set[int] = field(default_factory=set)  # bounding elements, from space boundaries
+
+
 class SpatialIndex:
     """Lazily computed per-model facts. Rebuilt when the session generation changes."""
 
@@ -84,6 +99,7 @@ class SpatialIndex:
         self.f = model
         self.unit = unit_scale(model)
         self.facts: dict[int, Facts] = {}
+        self.rooms: dict[int, Room] = {}
         self.north = self._true_north()
         self._ext_boundary: set[int] = set()
         self._int_boundary: set[int] = set()
@@ -157,8 +173,67 @@ class SpatialIndex:
             self._size(fa)
         for fa in self.facts.values():
             self._exterior(fa)
+        self._build_rooms()
 
-    def _geometry(self, els) -> None:
+    # -- rooms ---------------------------------------------------------------
+    def _build_rooms(self) -> None:
+        spaces = self.f.by_type("IfcSpace")
+        for sp in spaces:
+            container = ue.get_aggregate(sp)
+            self.rooms[sp.id()] = Room(sp.id(), sp.GlobalId, sp.Name, sp.LongName,
+                                       container.Name if container is not None and container.is_a("IfcBuildingStorey") else None)
+        self._for_each_shape(spaces, self._set_room_box)
+        by_element: dict[int, set[int]] = {}
+        for b in self.f.by_type("IfcRelSpaceBoundary"):
+            room = self.rooms.get(b.RelatingSpace.id()) if b.RelatingSpace is not None and b.RelatingSpace.is_a("IfcSpace") else None
+            el = b.RelatedBuildingElement
+            if room is not None and el is not None:
+                room.elements.add(el.id())
+                by_element.setdefault(el.id(), set()).add(room.id)
+        for el_id, room_ids in by_element.items():
+            is_door = el_id in self.facts and self.facts[el_id].ifc_class.startswith("IfcDoor")
+            for rid in room_ids:
+                others = {o for o in room_ids - {rid} if self._side_by_side(self.rooms[rid], self.rooms[o])}
+                self.rooms[rid].neighbours |= others
+                if is_door and others:
+                    self.rooms[rid].via_door.add(el_id)
+        if not by_element:
+            self._rooms_from_doors()
+
+    @staticmethod
+    def _side_by_side(a: Room, b: Room, max_wall: float = 0.8, min_shared_height: float = 0.5) -> bool:
+        """Sharing a long wall or a slab isn't adjacency: require a wall-thick gap at the same level."""
+        if a.bbox_min is None or b.bbox_min is None:
+            return True
+        shared_height = min(a.bbox_max[2], b.bbox_max[2]) - max(a.bbox_min[2], b.bbox_min[2])
+        return shared_height >= min_shared_height and _box_gap(a.bbox_min, a.bbox_max, b.bbox_min, b.bbox_max) <= max_wall
+
+    def _set_room_box(self, shape_id: int, v: np.ndarray) -> None:
+        self.rooms[shape_id].bbox_min, self.rooms[shape_id].bbox_max = v.min(0), v.max(0)
+
+    def _rooms_from_doors(self, reach: float = 0.3) -> None:
+        """No space boundaries in the file: a door touching two room boxes connects them."""
+        boxed = [r for r in self.rooms.values() if r.bbox_min is not None]
+        for fa in self.facts.values():
+            if not fa.ifc_class.startswith("IfcDoor") or fa.bbox_min is None:
+                continue
+            touching = [r for r in boxed if _box_gap(fa.bbox_min, fa.bbox_max, r.bbox_min, r.bbox_max) <= reach]
+            for r in touching:
+                r.elements.add(fa.id)
+                others = {o.id for o in touching if o.id != r.id}
+                r.neighbours |= others
+                if others:
+                    r.via_door.add(fa.id)
+
+    def _room_named(self, target: str) -> Room | None:
+        low = target.strip().lower()
+        fields = lambda r: [(r.name or "").lower(), (r.long_name or "").lower()]  # noqa: E731
+        return (next((r for r in self.rooms.values() if low in fields(r)), None)
+                or next((r for r in self.rooms.values() if any(low in x for x in fields(r))), None))
+
+    # -- geometry ------------------------------------------------------------
+    def _for_each_shape(self, els, visit) -> None:
+        """Call visit(id, world_vertices) for each of `els` that has geometry."""
         if not els:
             return
         s = ifcopenshell.geom.settings()
@@ -169,11 +244,16 @@ class SpatialIndex:
         while True:
             sh = it.get()
             v = np.asarray(sh.geometry.verts, dtype=float).reshape(-1, 3)
-            fa = self.facts.get(sh.id)
-            if fa is not None and len(v):
-                self._set_geometry(fa, v)
+            if len(v):
+                visit(sh.id, v)
             if not it.next():
                 break
+
+    def _geometry(self, els) -> None:
+        def visit(shape_id: int, v: np.ndarray) -> None:
+            if (fa := self.facts.get(shape_id)) is not None:
+                self._set_geometry(fa, v)
+        self._for_each_shape(els, visit)
 
     @staticmethod
     def _set_geometry(fa: Facts, v: np.ndarray) -> None:
@@ -391,12 +471,82 @@ class SpatialIndex:
             return sorted(items, key=lambda t: -(float(t[0].center[:2] @ d) if t[0].center is not None else -1e9))
         return items
 
+    def _row(self, fa: Facts) -> dict:
+        row = {"id": f"#{fa.id}", "class": fa.ifc_class, "name": fa.name, "storey": fa.storey}
+        if fa.center is not None:
+            row["center"] = [round(float(x), 2) for x in fa.center]
+        if fa.width is not None:
+            row["size"] = [round(fa.width, 2), round(fa.height, 2) if fa.height is not None else None]
+        if fa.host is not None:
+            row["host"] = f"#{fa.host}"
+        if fa.outward is not None:
+            row["facing"] = compass_label(self.bearing(fa.outward))
+        return row
+
+    def _room_row(self, room: Room) -> dict:
+        row = {"id": f"#{room.id}", "name": room.name, "long_name": room.long_name, "storey": room.storey}
+        if room.bbox_min is not None:
+            row["bbox"] = [[round(float(x), 2) for x in room.bbox_min], [round(float(x), 2) for x in room.bbox_max]]
+        return row
+
+    def _room_of(self, fa: Facts) -> Room | None:
+        for room in self.rooms.values():
+            if fa.id in room.elements and room.bbox_min is not None and fa.center is not None and _box_gap(fa.center, fa.center, room.bbox_min, room.bbox_max) <= 0.5:
+                return room
+        if fa.center is None:
+            return None
+        return next((r for r in self.rooms.values() if r.bbox_min is not None and _box_gap(fa.center, fa.center, r.bbox_min, r.bbox_max) <= 0.05), None)
+
+    def context_around(self, target: str, radius: float = 3.0, limit: int = 40) -> dict:
+        ref = target.strip()
+        room = fa = None
+        try:
+            el = self.resolve(ref)
+            room = self.rooms.get(el.id())
+            fa = self.facts.get(el.id())
+            if room is None and fa is None:
+                return {"error": f"{ref} is a {el.is_a()}; context needs a building element or room"}
+        except (RuntimeError, ValueError):
+            room = self._room_named(ref)
+            if room is None:
+                return {"error": f"no element or room matches {ref!r}"}
+        out: dict = {}
+        if fa is not None:
+            out["target"] = self._row(fa)
+            room = self._room_of(fa)
+            lo, hi = fa.bbox_min, fa.bbox_max
+        else:
+            out["target"] = self._room_row(room)
+            lo, hi = room.bbox_min, room.bbox_max
+        if room is not None:
+            if fa is not None:
+                out["room"] = self._room_row(room)
+            out["neighbouring_rooms"] = [self._room_row(self.rooms[n]) for n in sorted(room.neighbours)][:limit]
+            out["doors_to_neighbours"] = [f"#{d}" for d in sorted(room.via_door)][:limit]
+        if lo is None:
+            out["note"] = "target has no geometry, so nearby elements can't be listed"
+            return out
+        target_id = fa.id if fa is not None else None
+        near = sorted(
+            ((gap, o) for o in self.facts.values() if o.id != target_id and o.bbox_min is not None
+             and (gap := _box_gap(lo, hi, o.bbox_min, o.bbox_max)) <= radius),
+            key=lambda t: t[0])
+        out["nearby"] = [{**self._row(o), "gap_m": round(gap, 2)} for gap, o in near[:limit]]
+        if len(near) > limit:
+            out["omitted"] = len(near) - limit
+        return out
+
     def resolve(self, ref: str) -> ifcopenshell.entity_instance:
         """Accept '#123', '123', or a GlobalId."""
         ref = ref.strip()
         if ref.lstrip("#").isdigit():
             return self.f.by_id(int(ref.lstrip("#")))
         return self.f.by_guid(ref)
+
+
+def _box_gap(a_min: np.ndarray, a_max: np.ndarray, b_min: np.ndarray, b_max: np.ndarray) -> float:
+    """Straight-line gap between two axis-aligned boxes; 0 if they touch or overlap."""
+    return float(np.linalg.norm(np.maximum(np.maximum(b_min - a_max, a_min - b_max), 0)))
 
 
 def _storey_match(q, fa: Facts) -> bool:
@@ -429,7 +579,7 @@ def _ray_hits_obb(origin: np.ndarray, d: np.ndarray, o: Facts, reach: float) -> 
     return True
 
 
-_UNIT_CACHE: dict[int, float] = {}
+_UNIT_CACHE: weakref.WeakKeyDictionary[ifcopenshell.file, float] = weakref.WeakKeyDictionary()
 
 
 def unit_scale(f: ifcopenshell.file) -> float:
@@ -438,10 +588,9 @@ def unit_scale(f: ifcopenshell.file) -> float:
     Geometry from ifcopenshell.geom is always in metres; attribute values,
     placements and quantities are in project units. Everything exposed to the
     LLM is in metres, so convert at the boundary."""
-    key = id(f)
-    if key not in _UNIT_CACHE:
-        _UNIT_CACHE[key] = float(ifcopenshell.util.unit.calculate_unit_scale(f))
-    return _UNIT_CACHE[key]
+    if f not in _UNIT_CACHE:
+        _UNIT_CACHE[f] = float(ifcopenshell.util.unit.calculate_unit_scale(f))
+    return _UNIT_CACHE[f]
 
 
 def local_matrix(f: ifcopenshell.file, el) -> np.ndarray:
