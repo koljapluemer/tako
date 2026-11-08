@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { LoadedModel } from '../model';
+import type { Sample } from '../samples';
 import { Fade } from './fade';
 import { Inspect } from './inspect';
 import { spawnLanding, storeyLandings, type Landing } from './landing';
@@ -147,6 +148,16 @@ export class XRWalk {
     this.walking.resetTracking(this.walking.floorY);
     this.revalidate();
   };
+
+  setSamples(samples: Sample[], open: (sample: Sample) => void) {
+    this.menu.setSamples(samples);
+    this.menu.onSample = open;
+  }
+
+  /** The DOM status line can't be seen from inside the headset. */
+  notify(text: string, busy: boolean) {
+    if (this.presenting) this.menu.showNotice(text, busy);
+  }
 
   // --- moving the user ------------------------------------------------------
   /** Puts the head (not the play-area centre) at the point, optionally turning to face `yaw`. */

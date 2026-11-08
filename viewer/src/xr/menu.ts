@@ -1,6 +1,10 @@
 import * as THREE from 'three';
+import type { Sample } from '../samples';
 import type { Landing } from './landing';
 import { CanvasPanel } from './panel';
+
+/** `inert` rows only display text; pressing one leaves the panel open. */
+type Row = { label: string; dim?: boolean; inert?: boolean; run?: () => void };
 
 const ROW = 110;
 const PANEL_W = 0.62;
@@ -23,8 +27,12 @@ export class Menu {
   private panel: CanvasPanel | null = null;
   private landings: Landing[] = [];
   private hovered = -1;
+  private samples: Sample[] = [];
+  private page: 'landings' | 'samples' = 'landings';
+  private notice: { text: string; busy: boolean } | null = null;
 
   onChoose: (landing: Landing) => void = () => {};
+  onSample: (sample: Sample) => void = () => {};
 
   constructor(private scene: THREE.Scene, private camera: THREE.Camera) {
     const { ctx, canvasWidth: size } = this.button;
@@ -44,6 +52,17 @@ export class Menu {
     this.landings = [...landings].reverse();
   }
 
+  setSamples(samples: Sample[]) {
+    this.samples = samples;
+  }
+
+  /** Shows one line of text in the panel; `busy` hides the Close row. A new model closes it. */
+  showNotice(text: string, busy: boolean) {
+    this.close();
+    this.notice = { text, busy };
+    this.open();
+  }
+
   show(on: boolean) {
     this.button.mesh.visible = on;
     if (!on) this.close();
@@ -57,22 +76,35 @@ export class Menu {
     ctx.fillRect(0, 0, w, h);
     ctx.font = '500 52px system-ui, sans-serif';
     ctx.textBaseline = 'middle';
-    this.rows().forEach((label, i) => {
-      if (i === this.hovered) {
+    this.rows().forEach(({ label, dim, inert }, i) => {
+      if (i === this.hovered && !inert) {
         ctx.fillStyle = 'rgba(53,208,255,0.3)';
         ctx.fillRect(PADDING, PADDING + i * ROW, w - 2 * PADDING, ROW - 6);
       }
-      ctx.fillStyle = i === this.landings.length ? '#aab' : '#fff';
+      ctx.fillStyle = dim ? '#aab' : '#fff';
       ctx.fillText(label, PADDING * 3, PADDING + i * ROW + ROW / 2, w - PADDING * 6);
     });
     panel.refresh();
   }
 
-  private rows() {
-    return [...this.landings.map((l) => l.name), 'Close'];
+  private rows(): Row[] {
+    const close: Row = { label: 'Close', dim: true };
+    if (this.notice) return [{ label: this.notice.text, inert: true }, ...(this.notice.busy ? [] : [close])];
+    if (this.page === 'samples') {
+      return [
+        ...this.samples.map((sample) => ({ label: sample.name, run: () => this.onSample(sample) })),
+        { label: 'Back', dim: true, run: () => this.open() },
+      ];
+    }
+    return [
+      ...this.landings.map((landing) => ({ label: landing.name, run: () => this.onChoose(landing) })),
+      ...(this.samples.length ? [{ label: 'Switch building', run: () => this.open('samples') }] : []),
+      close,
+    ];
   }
 
-  private open() {
+  private open(page: 'landings' | 'samples' = 'landings') {
+    this.page = page;
     const height = (this.rows().length * ROW + 2 * PADDING) / 1000;
     const panel = new CanvasPanel(PANEL_W, height);
     this.panel = panel;
@@ -88,6 +120,7 @@ export class Menu {
   }
 
   close() {
+    this.notice = null;
     if (!this.panel) return;
     this.scene.remove(this.panel.mesh);
     this.panel.dispose();
@@ -106,9 +139,10 @@ export class Menu {
     if (this.panel) {
       const row = this.rowAt(ray);
       if (row >= 0) {
-        const landing = this.landings[row];
+        const item = this.rows()[row];
+        if (item.inert) return true;
         this.close();
-        if (landing) this.onChoose(landing);
+        item.run?.();
         return true;
       }
       if (this.panel.hit(ray)) return true;
