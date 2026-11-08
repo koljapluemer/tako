@@ -43,7 +43,11 @@ const JUNCTION_CLUSTER = 1.5;
 const DOOR_PROBE = 1.2;
 const M2_PER_POINT = 40;
 const MIN_POINTS = 3;
-const MAX_POINTS = 24;
+export const MAX_POINTS = 24;
+/** Smaller watershed basins are fragments such as stair treads, not somewhere anyone would go. */
+const MIN_ROOM_M2 = 4;
+/** Paired doors, or two flights landing together, are one place to a visitor. */
+const SAME_PLACE = 1.5;
 const MAX_CANDIDATES = 300;
 const RADIUS_MAX = 30;
 const STABLE_RADIUS = 1.5;
@@ -430,6 +434,19 @@ function facing(graph: Graph, node: number): number {
   return bestYaw > Math.PI ? bestYaw - 2 * Math.PI : bestYaw;
 }
 
+function onePerPlace(graph: Graph, candidates: Candidate[]): Candidate[] {
+  const kept: Candidate[] = [];
+  for (const candidate of candidates) {
+    const duplicate = (candidate.type === 'entrance' || candidate.type === 'stair') && kept.some((other) => (
+      other.type === candidate.type
+      && Math.abs(graph.y[other.node] - graph.y[candidate.node]) <= CLIMB
+      && Math.hypot(graph.x[other.node] - graph.x[candidate.node], graph.z[other.node] - graph.z[candidate.node]) < SAME_PLACE
+    ));
+    if (!duplicate) kept.push(candidate);
+  }
+  return kept;
+}
+
 /** Highest score first; anything within radius of a chosen point goes, except what must always stay. */
 function eliminate(order: Candidate[], scored: number[], distances: Float32Array[], radius: number): number[] {
   const removed = new Uint8Array(order.length);
@@ -466,12 +483,14 @@ export function generatePoints({ components, doors, spaces, storeys, previous = 
     && graph.y[node] >= min[1] - 0.5 && graph.y[node] <= max[1]
   ))?.name ?? null;
 
-  const candidates: Candidate[] = [
+  const candidates: Candidate[] = onePerPlace(graph, [
     ...doorCandidates(graph, region, doors, levels),
     ...stairEnds(graph, levels).map((node): Candidate => ({ node, type: 'stair', region: region[node], anchor: null, name: 'Stairs' })),
-    ...peaks.map((node, id): Candidate => ({ node, type: 'room', region: id, anchor: null, name: spaceName(node) })),
+    ...peaks.flatMap((node, id): Candidate[] => (
+      sizes[id] * graph.cell * graph.cell >= MIN_ROOM_M2 ? [{ node, type: 'room', region: id, anchor: null, name: spaceName(node) }] : []
+    )),
     ...findJunctions(graph, field).map((node): Candidate => ({ node, type: 'junction', region: region[node], anchor: null, name: 'Junction' })),
-  ];
+  ]);
 
   const scoreOf = (c: Candidate) => {
     const base = TYPE_WEIGHT[c.type];
@@ -503,7 +522,8 @@ export function generatePoints({ components, doors, spaces, storeys, previous = 
       if (attempt.length >= target) { chosen = attempt; low = radius; } else { high = radius; }
     }
 
-    for (const index of chosen) {
+    // Areas with no walking route between them can't eliminate each other, so the radius alone can't bound the count.
+    for (const index of chosen.slice(0, Math.max(MAX_POINTS, chosen.filter((i) => scored[i] >= TYPE_WEIGHT.stair).length))) {
       const c = order[index];
       let name = c.name;
       if (!name) {

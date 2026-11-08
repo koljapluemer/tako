@@ -66,6 +66,7 @@ corpus: setup
 # Typecheck and build the browser plus the stateless MCP bridge
 check: setup
     cd viewer && npm run build
+    cd viewer && npm test
     cd bridge && npm run check
     @echo ok
 

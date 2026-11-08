@@ -4,7 +4,7 @@ Goal: make tako properly usable in VR on a **standalone Meta Quest, opened from
 Quest Browser**, with natural walking, teleport, high-level navigation points
 and quick switching between versions of a building.
 
-Status: implemented on the `vr-navigation` branch and tested without a headset.
+Status: implemented, and tested in an emulated headset but not on a real one.
 The "Done when" criteria that need a real Quest are tracked in
 [vr-headset-checklist.md](vr-headset-checklist.md), and thresholds stay
 provisional until those results are in.
