@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { Collision, Hit } from '../collision';
 import { isValidLanding, type Reach } from './landing';
 import { headYaw, pointerRay, stick, type Pointer } from './pointer';
-import type { Aim } from './trigger';
 
 const SPEED = 8;
 const GRAVITY = 9.81;
@@ -98,8 +97,8 @@ export type FloorAimOptions = {
   stand: boolean;
 };
 
-/** Hold to aim at floor, release to commit. Works on every input type; a thumbstick can add a facing. */
-export class FloorAim implements Aim {
+/** Aims at floor between `begin` and `release`, which commits; the thumbstick can add a facing. */
+export class FloorAim {
   private collision: Collision | null = null;
   private active: Pointer | null = null;
   private destination: { point: THREE.Vector3; valid: boolean } | null = null;

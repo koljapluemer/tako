@@ -34,7 +34,7 @@ provisional until those results are in.
 | Area | Where | State |
 |---|---|---|
 | Natural walking | `viewer/src/xr/walking.ts` | Head tracked 1:1, rig follows floor height, walls fade to black rather than pushing the user |
-| Teleport and placement | `viewer/src/xr/floor-aim.ts`, `viewer/src/xr/trigger.ts` | Hold-to-aim paths, landing validation, one job per hand, choice of facing on the right stick |
+| Teleport and placement | `viewer/src/xr/floor-aim.ts`, `viewer/src/xr/session.ts` | Stick-held aim paths, landing validation, one job per hand, choice of facing on the right stick |
 | Station | `viewer/src/xr/station.ts` | Mini model, revision cards and their buttons, anchored on the floor |
 | Collision | `viewer/src/collision.ts` | BVH built in the worker, floor and solid parts |
 | Notices | `viewer/src/xr/notice.ts` | Status text in the headset |
@@ -53,11 +53,12 @@ Known gaps:
 
 See `vr-controls.svg` for the full mapping.
 
-- **Right trigger or pinch:** hold to aim a curved teleport, release to go. The
-  right stick chooses the landing direction while aiming and snap turns
+- **Right stick:** push forward to aim a curved teleport, release to go. Turning
+  it while aiming chooses the landing direction; left or right snap turns
   otherwise.
-- **Left trigger or pinch:** hold to aim a straight ray at the floor, release to
+- **Left stick:** push forward to aim a straight ray at the floor, release to
   place the station there. A new station replaces the old one.
+- **Either trigger:** press a panel.
 - The station turns to face the user once, when placed, and then stays put. It
   holds the mini model at about waist height, with the cards behind it, and
   Close and Buildings/Revisions buttons at either end of the cards.
@@ -90,8 +91,7 @@ See `vr-controls.svg` for the full mapping.
 | Ray | Fallback, snaps to the nearest pin |
 
 - Grab is `squeeze` on controllers and a pinch near the model with hands.
-  `session.ts` only listens for `select` today. Use `TriggerRouter.claim` so a grab
-  cannot start a teleport.
+  Teleporting is on the stick, so a grab cannot start one.
 - Pins are small buttons on stems above their floor. Contact highlights and
   shows the name, pressing about 1 cm arms, lifting off commits, sliding off
   sideways cancels.

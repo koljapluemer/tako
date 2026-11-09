@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 740" width="1120" height="740" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">tako VR controls on Meta Quest controllers</title>
-  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap presses a panel. Grip grabs the mini model. Holding X returns to the start.</desc>
+  <desc id="desc">Pushing the right thumbstick forward aims a teleport, turning it while aiming chooses the landing direction, and releasing it teleports; left or right snap turns 30 degrees. Pushing the left thumbstick forward aims a straight ray that places the mini model and revision cards on the floor when released. A trigger presses a panel. Grip grabs the mini model. Holding X returns to the start.</desc>
   <defs>
     <g id="controller">
       <!-- Trigger, behind the body; its colour comes from the use element -->
@@ -10,7 +10,7 @@
       <ellipse cx="205" cy="310" rx="98" ry="76" fill="#d6d3cd"/>
       <!-- Grip -->
       <path d="M263 470 C274 500 270 590 256 625 L240 620 C250 580 252 510 248 475 Z" fill="#2563eb"/>
-      <!-- Thumbstick, unbound unless drawn over -->
+      <!-- Thumbstick base -->
       <circle cx="160" cy="290" r="38" fill="#a8a29e"/>
       <circle cx="160" cy="290" r="27" fill="#c4c0ba"/>
       <!-- Face buttons, unbound -->
@@ -29,22 +29,25 @@
   <!-- Leaders -->
   <g fill="none" stroke-width="1.75" stroke-linejoin="round">
     <polyline stroke="#0f766e" points="960,252 960,150 740,150"/>
-    <polyline stroke="#dc2626" points="794,425 770,425 770,285 740,285"/>
-    <polyline stroke="#7c3aed" points="326,425 350,425 350,395 380,395"/>
-    <polyline stroke="#2563eb" points="262,545 320,545 320,505 380,505"/>
-    <polyline stroke="#2563eb" points="858,545 800,545 800,505 740,505"/>
+    <polyline stroke="#7c3aed" points="160,252 160,190 350,190 350,286 380,286"/>
+    <polyline stroke="#dc2626" points="794,425 770,425 770,376 740,376"/>
+    <polyline stroke="#dc2626" points="326,425 350,425 350,376 380,376"/>
+    <polyline stroke="#2563eb" points="262,545 320,545 320,464 380,464"/>
+    <polyline stroke="#2563eb" points="858,545 800,545 800,464 740,464"/>
   </g>
 
-  <use href="#controller" xlink:href="#controller" fill="#7c3aed"/>
+  <use href="#controller" xlink:href="#controller" fill="#dc2626"/>
   <use href="#controller" xlink:href="#controller" fill="#dc2626" transform="matrix(-1 0 0 1 1120 0)"/>
 
-  <!-- Right thumbstick is the only bound stick -->
+  <!-- Thumbsticks -->
   <circle cx="960" cy="290" r="27" fill="#0f766e"/>
   <circle cx="960" cy="290" r="18" fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.5"/>
+  <circle cx="160" cy="290" r="27" fill="#7c3aed"/>
+  <circle cx="160" cy="290" r="18" fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.5"/>
 
   <!-- X returns to the start -->
   <circle cx="232" cy="342" r="21" fill="#b45309"/>
-  <polyline fill="none" stroke="#b45309" stroke-width="1.75" stroke-linejoin="round" points="232,363 232,598 380,598"/>
+  <polyline fill="none" stroke="#b45309" stroke-width="1.75" stroke-linejoin="round" points="232,363 232,570 380,570"/>
 
   <!-- Button letters are outside the mirrored group so they read correctly -->
   <g font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">
@@ -59,46 +62,42 @@
   </g>
 
   <!-- Right thumbstick -->
-  <rect x="380" y="96" width="360" height="116" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.75"/>
+  <rect x="380" y="96" width="360" height="130" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.75"/>
   <text x="396" y="122" font-size="16" font-weight="700" fill="#0f766e">Right thumbstick</text>
+  <text x="536" y="122" font-size="16" font-weight="700" fill="#1c1917">Teleport</text>
   <g font-size="14" fill="#44403c">
-    <text x="396" y="150"><tspan font-weight="600">Left / right:</tspan> snap turn 30°</text>
-    <text x="396" y="172"><tspan font-weight="600">While aiming a teleport:</tspan></text>
-    <text x="396" y="194">choose which way you face on landing</text>
+    <text x="396" y="147"><tspan font-weight="600">Push forward:</tspan> aim with a curved beam</text>
+    <text x="396" y="168"><tspan font-weight="600">Turn while aiming:</tspan> choose landing direction</text>
+    <text x="396" y="189"><tspan font-weight="600">Release:</tspan> teleport there</text>
+    <text x="396" y="210"><tspan font-weight="600">Left / right:</tspan> snap turn 30°</text>
   </g>
 
-  <!-- Right trigger -->
-  <rect x="380" y="228" width="360" height="104" rx="10" fill="#ffffff" stroke="#dc2626" stroke-width="1.75"/>
-  <text x="396" y="254" font-size="16" font-weight="700" fill="#dc2626">Right trigger</text>
-  <text x="502" y="254" font-size="16" font-weight="700" fill="#1c1917">Teleport</text>
+  <!-- Left thumbstick -->
+  <rect x="380" y="242" width="360" height="88" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="1.75"/>
+  <text x="396" y="268" font-size="16" font-weight="700" fill="#7c3aed">Left thumbstick</text>
+  <text x="526" y="268" font-size="16" font-weight="700" fill="#1c1917">Model and revisions</text>
   <g font-size="14" fill="#44403c">
-    <text x="396" y="279"><tspan font-weight="600">Hold:</tspan> aim with a curved beam</text>
-    <text x="396" y="300"><tspan font-weight="600">Release:</tspan> teleport there</text>
-    <text x="396" y="321"><tspan font-weight="600">Tap:</tspan> press a panel</text>
+    <text x="396" y="293"><tspan font-weight="600">Push forward:</tspan> aim at the floor with a straight beam</text>
+    <text x="396" y="314"><tspan font-weight="600">Release:</tspan> place them there, replacing any old one</text>
   </g>
 
-  <!-- Left trigger -->
-  <rect x="380" y="348" width="360" height="104" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="1.75"/>
-  <text x="396" y="374" font-size="16" font-weight="700" fill="#7c3aed">Left trigger</text>
-  <text x="494" y="374" font-size="16" font-weight="700" fill="#1c1917">Model and revisions</text>
-  <g font-size="14" fill="#44403c">
-    <text x="396" y="399"><tspan font-weight="600">Hold:</tspan> aim at the floor with a straight beam</text>
-    <text x="396" y="420"><tspan font-weight="600">Release:</tspan> place them there, replacing any old one</text>
-    <text x="396" y="441"><tspan font-weight="600">Tap:</tspan> press a panel</text>
-  </g>
+  <!-- Triggers -->
+  <rect x="380" y="346" width="360" height="60" rx="10" fill="#ffffff" stroke="#dc2626" stroke-width="1.75"/>
+  <text x="396" y="370" font-size="16" font-weight="700" fill="#dc2626">Either trigger</text>
+  <text x="396" y="392" font-size="14" fill="#44403c">Press a panel</text>
 
   <!-- Grip -->
-  <rect x="380" y="468" width="360" height="84" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="1.75"/>
-  <text x="396" y="494" font-size="16" font-weight="700" fill="#2563eb">Grip</text>
-  <text x="440" y="494" font-size="13" fill="#57534e">middle finger, on the mini model</text>
+  <rect x="380" y="422" width="360" height="84" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="1.75"/>
+  <text x="396" y="448" font-size="16" font-weight="700" fill="#2563eb">Grip</text>
+  <text x="440" y="448" font-size="13" fill="#57534e">middle finger, on the mini model</text>
   <g font-size="14" fill="#44403c">
-    <text x="396" y="517"><tspan font-weight="600">One hand:</tspan> spin</text>
-    <text x="396" y="539"><tspan font-weight="600">Two hands:</tspan> move, zoom and turn</text>
+    <text x="396" y="471"><tspan font-weight="600">One hand:</tspan> spin</text>
+    <text x="396" y="493"><tspan font-weight="600">Two hands:</tspan> move, zoom and turn</text>
   </g>
 
   <!-- X button -->
-  <rect x="380" y="568" width="360" height="60" rx="10" fill="#ffffff" stroke="#b45309" stroke-width="1.75"/>
-  <text x="396" y="592" font-size="16" font-weight="700" fill="#b45309">X button</text>
-  <text x="472" y="592" font-size="16" font-weight="700" fill="#1c1917">Return to start</text>
-  <text x="396" y="614" font-size="14" fill="#44403c"><tspan font-weight="600">Hold:</tspan> until the ring fills</text>
+  <rect x="380" y="522" width="360" height="60" rx="10" fill="#ffffff" stroke="#b45309" stroke-width="1.75"/>
+  <text x="396" y="546" font-size="16" font-weight="700" fill="#b45309">X button</text>
+  <text x="472" y="546" font-size="16" font-weight="700" fill="#1c1917">Return to start</text>
+  <text x="396" y="568" font-size="14" fill="#44403c"><tspan font-weight="600">Hold:</tspan> until the ring fills</text>
 </svg>

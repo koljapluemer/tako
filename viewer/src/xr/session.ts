@@ -15,7 +15,6 @@ import { Notice } from './notice';
 import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, type Pointer } from './pointer';
 import { Spawn, type Spot } from './spawn';
 import { Station } from './station';
-import { TriggerRouter } from './trigger';
 import { Walking } from './walking';
 
 const POINTER_COUNT = 4; // two hands plus two controllers on multimodal headsets
@@ -43,6 +42,8 @@ const MAX_RESCUE_DISTANCE = 30;
 const SNAP_ANGLE = THREE.MathUtils.degToRad(30);
 const SNAP_PRESS = 0.8;
 const SNAP_RELEASE = 0.3;
+const AIM_PRESS = 0.7;
+const AIM_RELEASE = 0.25;
 const RETURN_HOLD_MS = 800;
 
 export class XRWalk {
@@ -51,7 +52,11 @@ export class XRWalk {
   private walking: Walking;
   private teleport: FloorAim;
   private placement: FloorAim;
-  private trigger: TriggerRouter;
+  /** Set while the user is being moved. */
+  private locked = false;
+  private stickAims = new Map<Pointer, FloorAim>();
+  /** Sticks that have recentred since their last push. */
+  private sticksAtRest = new WeakSet<Pointer>();
   private notice: Notice;
   private station: Station;
   private hud: Hud | null;
@@ -83,17 +88,11 @@ export class XRWalk {
     const floorY = () => this.walking.floorY;
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
     this.placement = new FloorAim(scene, camera, floorY, { path: straightPath, facing: false, stand: false });
-    this.trigger = new TriggerRouter({ right: this.teleport, left: this.placement });
     this.notice = new Notice(scene, camera);
     this.station = new Station(scene);
     this.station.onPin = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
 
-    this.trigger.claim = (pointer) => {
-      const ray = pointerRay(pointer, new THREE.Ray());
-      if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return true;
-      return this.notice.press(ray) || this.station.press(ray);
-    };
     this.teleport.commit = (destination, pointer) => void this.travel(destination, pointer);
     this.placement.commit = ({ point }) => this.station.place(point, this.camera.getWorldPosition(new THREE.Vector3()));
 
@@ -130,18 +129,22 @@ export class XRWalk {
       visual.visible = pointer.source?.targetRayMode === 'tracked-pointer';
     });
     events.addEventListener('disconnected', () => {
-      this.trigger.disconnected(pointer);
       this.station.grabEnd(index);
       pointer.source = null;
       visual.visible = false;
     });
-    events.addEventListener('selectstart', () => this.trigger.down(pointer));
+    events.addEventListener('selectstart', () => this.press(pointer));
     events.addEventListener('selectend', () => {
       if (pointer.source?.hand) this.station.grabEnd(index);
-      this.trigger.up(pointer);
     });
     events.addEventListener('squeezestart', () => this.station.grabStart(index, this.grabPosition(pointer)));
     events.addEventListener('squeezeend', () => this.station.grabEnd(index));
+  }
+
+  private press(pointer: Pointer) {
+    const ray = pointerRay(pointer, new THREE.Ray());
+    if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return;
+    if (!this.notice.press(ray)) this.station.press(ray);
   }
 
   private grabPosition(pointer: Pointer) {
@@ -195,7 +198,8 @@ export class XRWalk {
     this.fade.reset();
     this.teleport.cancel();
     this.placement.cancel();
-    this.trigger.locked = false;
+    this.stickAims.clear();
+    this.locked = false;
     this.returnHold.reset();
     this.returnRing.set(0); // the camera goes back to the desktop view with its children
     this.walking.restoreDoors();
@@ -248,9 +252,30 @@ export class XRWalk {
     this.walking.resetTracking(point.y);
   }
 
+  /** Stick forward starts that hand's aim and letting it spring back commits; it may swing freely in between. */
+  private updateStickAims() {
+    for (const pointer of this.pointers) {
+      const axes = stick(pointer.source);
+      const tilt = axes ? Math.hypot(axes[0], axes[1]) : 0;
+      const aim = this.stickAims.get(pointer);
+      if (aim && tilt >= AIM_RELEASE) continue;
+      if (aim) {
+        this.stickAims.delete(pointer);
+        if (axes) aim.release(pointer);
+        else aim.abandon(pointer);
+      }
+      if (tilt < AIM_RELEASE) this.sticksAtRest.add(pointer);
+      else if (axes && tilt > AIM_PRESS && !this.locked && this.sticksAtRest.delete(pointer) && -axes[1] > Math.abs(axes[0])) {
+        const next = handOf(pointer) === 'right' ? this.teleport : this.placement;
+        next.begin(pointer);
+        this.stickAims.set(pointer, next);
+      }
+    }
+  }
+
   /** Rotation only, for seated use: there is deliberately no stick movement. */
   private updateSnapTurn() {
-    if (this.teleport.aiming || this.trigger.locked) return;
+    if (this.teleport.aiming || this.locked) return;
     for (const pointer of this.pointers) {
       if (handOf(pointer) !== 'right') continue;
       const axes = stick(pointer.source);
@@ -274,7 +299,7 @@ export class XRWalk {
   /** Holding X on the left controller goes back to the start; aiming or travelling takes priority. */
   private updateReturnHold(now: number) {
     const pointer = this.pointers.find((p) => handOf(p) === 'left' && lowerFaceButtonDown(p.source));
-    const blocked = this.trigger.locked || this.teleport.aiming || this.placement.aiming;
+    const blocked = this.locked || this.teleport.aiming || this.placement.aiming;
     const progress = this.returnHold.update(pointer != null, now, blocked);
     this.returnRing.set(progress);
     if (progress === 1) void this.jump(() => this.returnToSpawn(), pointer);
@@ -291,13 +316,13 @@ export class XRWalk {
   }
 
   private async jump(move: () => void, pointer?: Pointer) {
-    if (this.trigger.locked) return;
-    this.trigger.locked = true;
+    if (this.locked) return;
+    this.locked = true;
     await this.fade.to('teleport', 1, 90);
     if (this.presenting) move();
     pulse(pointer?.source ?? null);
     await this.fade.to('teleport', 0, 120);
-    this.trigger.locked = false;
+    this.locked = false;
   }
 
   // --- model swaps ----------------------------------------------------------
@@ -445,7 +470,7 @@ export class XRWalk {
       void this.fade.to('start', 0, 200);
     }
     this.walking.update(dt);
-    this.trigger.update();
+    this.updateStickAims();
     this.teleport.update();
     this.placement.update();
     this.updateReturnHold(now);
