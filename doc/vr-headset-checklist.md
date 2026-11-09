@@ -52,6 +52,14 @@ Needs a local project with at least two revisions on the headset.
 - [ ] The model reads clearly and isn't cut by nearby walls.
 - [ ] Controller and hand models appear (they download from the WebXR profiles CDN).
 
+### Station
+- [ ] Left trigger's straight ray places the station on valid floor and refuses anything else; a new one replaces the old.
+- [ ] Right trigger teleports and the left never does; right stick sets the landing direction and is the only one that snap turns.
+- [ ] Model height and card distance feel right, and the cards read clearly. Tune `MODEL_HEIGHT`, `STAND_DISTANCE` and `CARD_HEIGHT` (`viewer/src/xr/station.ts`).
+- [ ] A station placed close to a wall is still usable: the model can clip into it.
+- [ ] Walls hide the station and stop presses reaching it.
+- [ ] Close works, Buildings switches building, and a revision swap keeps the station in place.
+
 ### Finish
 - [ ] Bounded-floor works where available, with no offset compared with local-floor.
 - [ ] A session starts at an entrance on models that have one.

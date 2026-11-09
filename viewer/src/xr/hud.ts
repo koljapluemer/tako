@@ -10,7 +10,7 @@ type Memory = { usedJSHeapSize: number; jsHeapSizeLimit: number };
 
 /** Measurement readout for headset budgeting; enabled with `?hud=1`, view-locked so it survives teleports. */
 export class Hud {
-  private panel = new CanvasPanel(0.3, 0.24, 1200);
+  private panel = new CanvasPanel(0.3, 0.24, { pixelsPerMetre: 1200 });
   private frames: number[] = [];
   private last = 0;
   private redrawAt = 0;

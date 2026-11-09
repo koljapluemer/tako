@@ -3,17 +3,17 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { LoadedModel } from '../model';
 import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
-import { Arc } from './arc';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { Fade } from './fade';
+import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
 import { Hud } from './hud';
 import { Inspect } from './inspect';
 import { navReach, spawnLanding, storeyLandings, type Landing } from './landing';
-import { Menu, type MenuChoice } from './menu';
-import { MiniModel } from './mini-model';
-import { pollOpeners } from './openers';
-import { headYaw, pointerRay, stick, Teleport, type Destination, type Pointer } from './teleport';
+import { Notice } from './notice';
+import { handOf, headYaw, pointerRay, stick, type Pointer } from './pointer';
+import { Station } from './station';
+import { TriggerRouter } from './trigger';
 import { Walking } from './walking';
 
 const POINTER_COUNT = 4; // two hands plus two controllers on multimodal headsets
@@ -46,11 +46,12 @@ export class XRWalk {
   readonly rig = new THREE.Group();
   private fade: Fade;
   private walking: Walking;
-  private teleport: Teleport;
-  private menu: Menu;
+  private teleport: FloorAim;
+  private placement: FloorAim;
+  private trigger: TriggerRouter;
+  private notice: Notice;
   private inspect: Inspect;
-  private arc: Arc;
-  private mini: MiniModel;
+  private station: Station;
   private hud: Hud | null;
   private pointers: Pointer[] = [];
   private model: LoadedModel | null = null;
@@ -74,23 +75,24 @@ export class XRWalk {
 
     this.fade = new Fade(camera);
     this.walking = new Walking(this.rig, camera, this.fade);
-    this.teleport = new Teleport(scene, camera, () => this.walking.floorY);
-    this.menu = new Menu(scene, camera);
+    const floorY = () => this.walking.floorY;
+    this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
+    this.placement = new FloorAim(scene, camera, floorY, { path: straightPath, facing: false, stand: false });
+    this.trigger = new TriggerRouter({ right: this.teleport, left: this.placement });
+    this.notice = new Notice(scene, camera);
     this.inspect = new Inspect(scene, camera);
-    this.arc = new Arc(scene, camera);
-    this.mini = new MiniModel(scene);
-    this.mini.onCommit = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
-    this.menu.onChoose = (choice, ray) => this.openObject(choice, ray);
-    this.menu.show(false);
+    this.station = new Station(scene);
+    this.station.onPin = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
 
-    this.teleport.claim = (pointer) => {
+    this.trigger.claim = (pointer) => {
       const ray = pointerRay(pointer, new THREE.Ray());
-      if (pointer.source?.hand && this.mini.grabStart(pointer.index, this.grabPosition(pointer))) return true;
-      return this.mini.press(ray) || this.arc.press(ray) || this.menu.press(ray) || this.inspect.press(ray);
+      if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return true;
+      return this.notice.press(ray) || this.station.press(ray) || this.inspect.press(ray);
     };
-    this.teleport.tap = (pointer) => void this.inspect.tap(pointerRay(pointer, new THREE.Ray()));
+    this.trigger.tap = (pointer) => void this.inspect.tap(pointerRay(pointer, new THREE.Ray()));
     this.teleport.commit = (destination, pointer) => void this.travel(destination, pointer);
+    this.placement.commit = ({ point }) => this.station.place(point, this.camera.getWorldPosition(new THREE.Vector3()));
 
     for (let index = 0; index < POINTER_COUNT; index++) this.addPointer(index);
 
@@ -116,7 +118,7 @@ export class XRWalk {
     hand.add(handModels.createHandModel(hand as never, 'mesh'));
     this.rig.add(hand);
 
-    const pointer: Pointer = { index, ray, grip, hand, source: null, downAt: null, consumed: false };
+    const pointer: Pointer = { index, ray, grip, hand, source: null };
     this.pointers.push(pointer);
     const events = ray as unknown as THREE.EventDispatcher<Record<string, { data?: XRInputSource }>>;
     events.addEventListener('connected', (e) => {
@@ -125,18 +127,18 @@ export class XRWalk {
       visual.visible = pointer.source?.targetRayMode === 'tracked-pointer';
     });
     events.addEventListener('disconnected', () => {
-      this.teleport.disconnected(pointer);
-      this.mini.grabEnd(index);
+      this.trigger.disconnected(pointer);
+      this.station.grabEnd(index);
       pointer.source = null;
       visual.visible = false;
     });
-    events.addEventListener('selectstart', () => this.teleport.selectStart(pointer));
+    events.addEventListener('selectstart', () => this.trigger.down(pointer));
     events.addEventListener('selectend', () => {
-      if (pointer.source?.hand) this.mini.grabEnd(index);
-      this.teleport.selectEnd(pointer);
+      if (pointer.source?.hand) this.station.grabEnd(index);
+      this.trigger.up(pointer);
     });
-    events.addEventListener('squeezestart', () => this.mini.grabStart(index, this.grabPosition(pointer)));
-    events.addEventListener('squeezeend', () => this.mini.grabEnd(index));
+    events.addEventListener('squeezestart', () => this.station.grabStart(index, this.grabPosition(pointer)));
+    events.addEventListener('squeezeend', () => this.station.grabEnd(index));
   }
 
   private grabPosition(pointer: Pointer) {
@@ -148,13 +150,6 @@ export class XRWalk {
     const joint = pointer.source?.hand ? pointer.hand.joints['index-finger-tip'] : null;
     if (joint?.visible) return joint.getWorldPosition(new THREE.Vector3());
     return pointer.source?.targetRayMode === 'tracked-pointer' ? pointer.ray.getWorldPosition(new THREE.Vector3()) : null;
-  }
-
-  private openObject(choice: MenuChoice, ray: THREE.Ray) {
-    if (choice === 'arc') return this.arc.toggle(ray);
-    if (!this.mini.available) return this.menu.showNotice('Mapping walkable areas…', false);
-    this.camera.getWorldPosition(head);
-    this.mini.toggle(ray, head);
   }
 
   get presenting() {
@@ -171,7 +166,6 @@ export class XRWalk {
     camera.far = FAR;
     camera.updateProjectionMatrix();
     this.modelChangedInSession = false;
-    this.menu.show(true);
     this.previous = performance.now();
     this.needsPlacement = true;
     this.sessionFrames = 0;
@@ -196,11 +190,11 @@ export class XRWalk {
     const { camera, desktop } = this;
     this.fade.reset();
     this.teleport.cancel();
-    this.teleport.locked = false;
+    this.placement.cancel();
+    this.trigger.locked = false;
     this.walking.restoreDoors();
-    this.menu.show(false);
-    this.arc.close();
-    this.mini.close();
+    this.notice.close();
+    this.station.close();
     this.inspect.close();
     this.rig.position.set(0, 0, 0);
     this.rig.rotation.set(0, 0, 0);
@@ -219,16 +213,16 @@ export class XRWalk {
   };
 
   setSamples(samples: Sample[], open: (sample: Sample) => void) {
-    this.arc.setSamples(samples, open);
+    this.station.setSamples(samples, open);
   }
 
   setVersions(source: VersionSource) {
-    this.arc.source = source;
+    this.station.source = source;
   }
 
   /** The DOM status line can't be seen from inside the headset. */
   notify(text: string, busy: boolean) {
-    if (this.presenting) this.menu.showNotice(text, busy);
+    if (this.presenting) this.notice.show(text, busy);
   }
 
   // --- moving the user ------------------------------------------------------
@@ -251,8 +245,9 @@ export class XRWalk {
 
   /** Rotation only, for seated use: there is deliberately no stick movement. */
   private updateSnapTurn() {
-    if (this.teleport.aiming || this.teleport.locked) return;
+    if (this.teleport.aiming || this.trigger.locked) return;
     for (const pointer of this.pointers) {
+      if (handOf(pointer) !== 'right') continue;
       const axes = stick(pointer.source);
       const x = axes ? axes[0] : 0;
       if (Math.abs(x) < SNAP_RELEASE) this.snapped.delete(pointer);
@@ -272,14 +267,14 @@ export class XRWalk {
   }
 
   private async travel({ point, yaw }: Destination, pointer?: Pointer) {
-    if (this.teleport.locked) return;
-    this.teleport.locked = true;
+    if (this.trigger.locked) return;
+    this.trigger.locked = true;
     this.inspect.close();
     await this.fade.to('teleport', 1, 90);
     if (this.presenting) this.placeHead(point, yaw);
     pulse(pointer?.source ?? null);
     await this.fade.to('teleport', 0, 120);
-    this.teleport.locked = false;
+    this.trigger.locked = false;
   }
 
   // --- model swaps ----------------------------------------------------------
@@ -295,24 +290,26 @@ export class XRWalk {
   setModel(model: LoadedModel, switched: boolean) {
     const before = this.model;
     this.model = model;
-    this.teleport.cancel();
+    for (const aim of [this.teleport, this.placement]) {
+      aim.cancel();
+      aim.setModel(model.collision);
+      aim.reach = null;
+    }
     this.walking.setModel(model.collision, model.doorCells);
-    this.teleport.setModel(model.collision);
-    this.teleport.reach = null;
     this.inspect.setModel(model.collision, model.doors);
+    this.station.setCollision(model.collision);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
     this.spawn = spawnLanding(landings);
-    this.menu.clearNotice();
-    this.mini.setData(null, [], []);
+    this.notice.close();
+    this.station.setNavigation(null, [], []);
     if (model.nav) this.setNavigation(model); // a cached revision already has one
 
     if (!this.presenting) return;
     if (switched) {
       this.modelChangedInSession = true;
-      this.arc.close();
-      this.mini.close();
+      this.station.close();
     } else {
-      this.arc.refresh();
+      this.station.refresh();
     }
     if (this.needsPlacement) return; // update() places the user once the headset pose is live
     if (switched || !before) return this.placeAtSpawn();
@@ -322,6 +319,7 @@ export class XRWalk {
     if (a[12] !== b[12] || a[13] !== b[13] || a[14] !== b[14]) {
       const shift = new THREE.Vector3(b[12] - a[12], b[13] - a[13], b[14] - a[14]);
       this.rig.position.add(shift);
+      this.station.translate(shift);
       this.walking.resetTracking(this.rig.position.y);
       this.walking.lastValid?.add(shift);
     }
@@ -334,12 +332,13 @@ export class XRWalk {
     this.walking.setNavigation(model.nav);
     const reach = navReach(model.nav, () => this.feet());
     this.teleport.reach = reach;
+    this.placement.reach = reach;
     const landings = storeyLandings(model.collision, model.storeys, model.terrain, reach);
     const entrance = model.points.find((point) => point.type === 'entrance');
     this.spawn = entrance
       ? { name: entrance.name, position: new THREE.Vector3(...entrance.position), yaw: entrance.yaw }
       : spawnLanding(landings);
-    this.mini.setData(model.nav, model.points, model.levels);
+    this.station.setNavigation(model.nav, model.points, model.levels);
   }
 
   private feet() {
@@ -391,15 +390,14 @@ export class XRWalk {
       void this.fade.to('start', 0, 200);
     }
     this.walking.update(dt);
-    this.teleport.update(this.pointers);
+    this.trigger.update();
+    this.teleport.update();
+    this.placement.update();
     this.updateSnapTurn();
     const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => pointerRay(p, new THREE.Ray()));
-    this.menu.update(dt, rays);
-    this.arc.update(rays);
-    pollOpeners(this.pointers, (choice, pointer) => this.openObject(choice, pointerRay(pointer, new THREE.Ray())));
     this.camera.getWorldPosition(head);
     this.camera.getWorldDirection(direction);
-    this.mini.update({
+    this.station.update({
       user: { x: head.x, y: this.walking.floorY, z: head.z, yaw: Math.atan2(-direction.x, -direction.z) },
       grabs: this.pointers.map((p) => ({ id: p.index, position: this.grabPosition(p) })),
       tips: this.pointers.flatMap((p) => {

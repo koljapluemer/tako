@@ -1,23 +1,17 @@
 import * as THREE from 'three';
 import type { Sample } from '../samples';
 import { formatAge, type Version, type VersionSource } from '../versions';
-import { CanvasPanel } from './panel';
+import { CanvasPanel, type LimitedRay } from './panel';
 
-const RADIUS = 1.25;
-const ANGLE_STEP = 0.3;
+export const ARC_RADIUS = 1.25;
+export const ARC_ANGLE_STEP = 0.3;
+export const ARC_SLOTS = 5;
 const CARD_W = 0.34;
 const CARD_H = 0.21;
-const DROP = 0.1;
-const SLOTS = 5;
-const WALK_AWAY = 1.4;
 
 type Item = { title: string; detail: string; current: boolean; dim: boolean; run: () => void };
 
-const centre = new THREE.Vector3();
-const forward = new THREE.Vector3();
-const head = new THREE.Vector3();
-
-/** A world-locked, gravity-aligned row of cards for moving between versions. It stays open for A/B comparison. */
+/** A world-locked, gravity-aligned row of cards for moving between versions or buildings. */
 export class Arc {
   private cards: Array<{ panel: CanvasPanel; item: Item }> = [];
   private items: Item[] = [];
@@ -25,33 +19,29 @@ export class Arc {
   private scroll = 0;
   private hovered = -1;
   private yaw = 0;
+  private centre = new THREE.Vector3();
   private opened = false;
   private samples: Sample[] = [];
   private openSample: (sample: Sample) => void = () => {};
   source: VersionSource | null = null;
 
-  constructor(private scene: THREE.Scene, private camera: THREE.Camera) {}
+  constructor(private scene: THREE.Scene) {}
 
   setSamples(samples: Sample[], open: (sample: Sample) => void) {
     this.samples = samples;
     this.openSample = open;
   }
 
-  get isOpen() {
-    return this.opened;
+  get showingBuildings() {
+    return this.mode === 'buildings';
   }
 
-  /** The ray only chooses the direction: distance and height are fixed so the cards stay usable. */
-  async open(ray: THREE.Ray) {
-    this.camera.getWorldPosition(head);
-    forward.copy(ray.direction).setY(0);
-    if (forward.lengthSq() < 0.01) this.camera.getWorldDirection(forward).setY(0);
-    this.yaw = Math.atan2(forward.x, forward.z);
-    centre.set(head.x, head.y - DROP, head.z);
+  /** The cards curve around `centre`, spread either side of `yaw`. */
+  async open(centre: THREE.Vector3, yaw: number) {
+    this.centre.copy(centre);
+    this.yaw = yaw;
     this.opened = true;
-    this.mode = 'versions';
-    this.scroll = -1;
-    await this.refresh();
+    await this.showVersions();
   }
 
   close() {
@@ -59,9 +49,24 @@ export class Arc {
     this.clearCards();
   }
 
-  toggle(ray: THREE.Ray) {
-    if (this.opened) this.close();
-    else void this.open(ray);
+  showVersions() {
+    this.mode = 'versions';
+    this.scroll = -1;
+    return this.refresh();
+  }
+
+  showBuildings() {
+    this.mode = 'buildings';
+    this.scroll = 0;
+    return this.refresh();
+  }
+
+  translate(shift: THREE.Vector3) {
+    this.centre.add(shift);
+    for (const { panel } of this.cards) {
+      panel.mesh.position.add(shift);
+      panel.mesh.updateMatrixWorld(true);
+    }
   }
 
   /** The list of versions, or which one is current, may have changed. */
@@ -74,7 +79,6 @@ export class Arc {
 
   private async versionItems(): Promise<Item[]> {
     const versions = await this.source?.list().catch(() => [] as Version[]) ?? [];
-    // Newest nearest the "Other buildings" end.
     const items = versions.map((version): Item => ({
       title: version.title,
       detail: formatAge(version.createdAt),
@@ -83,25 +87,11 @@ export class Arc {
       run: () => this.source?.select(version),
     }));
     if (this.scroll < 0) this.scroll = Math.max(0, versions.findIndex((v) => v.current) - 1);
-    return [...items, this.navigationItem('Other buildings', 'buildings')];
+    return items;
   }
 
   private buildingItems(): Item[] {
-    return [
-      ...this.samples.map((sample): Item => ({ title: sample.name, detail: '', current: false, dim: false, run: () => this.openSample(sample) })),
-      this.navigationItem('Revisions', 'versions'),
-    ];
-  }
-
-  private navigationItem(title: string, mode: Arc['mode']): Item {
-    return {
-      title, detail: '', current: false, dim: true,
-      run: () => {
-        this.mode = mode;
-        this.scroll = 0;
-        void this.refresh();
-      },
-    };
+    return this.samples.map((sample): Item => ({ title: sample.name, detail: '', current: false, dim: false, run: () => this.openSample(sample) }));
   }
 
   private arrow(title: string, delta: number): Item {
@@ -117,10 +107,10 @@ export class Arc {
   /** Arrows take a slot each, and only appear when there is something to scroll to. */
   private visibleItems(): Item[] {
     const { items } = this;
-    if (items.length <= SLOTS) return items;
+    if (items.length <= ARC_SLOTS) return items;
     this.scroll = Math.max(0, Math.min(this.scroll, items.length - 1));
-    const before = this.scroll > 0 ? [this.arrow('‹', -(SLOTS - 2))] : [];
-    const room = SLOTS - before.length;
+    const before = this.scroll > 0 ? [this.arrow('‹', -(ARC_SLOTS - 2))] : [];
+    const room = ARC_SLOTS - before.length;
     const fitsToEnd = this.scroll + room >= items.length;
     const shown = items.slice(this.scroll, this.scroll + (fitsToEnd ? room : room - 1));
     return fitsToEnd ? [...before, ...shown] : [...before, ...shown, this.arrow('›', shown.length)];
@@ -138,10 +128,11 @@ export class Arc {
   private layout() {
     this.clearCards();
     const visible = this.visibleItems();
+    const { centre } = this;
     visible.forEach((item, slot) => {
-      const panel = new CanvasPanel(CARD_W, CARD_H);
-      const angle = this.yaw + (slot - (visible.length - 1) / 2) * -ANGLE_STEP;
-      panel.mesh.position.set(centre.x + Math.sin(angle) * RADIUS, centre.y, centre.z + Math.cos(angle) * RADIUS);
+      const panel = new CanvasPanel(CARD_W, CARD_H, { depthTest: true });
+      const angle = this.yaw + (slot - (visible.length - 1) / 2) * -ARC_ANGLE_STEP;
+      panel.mesh.position.set(centre.x + Math.sin(angle) * ARC_RADIUS, centre.y, centre.z + Math.cos(angle) * ARC_RADIUS);
       panel.mesh.rotation.y = angle + Math.PI;
       panel.mesh.visible = true;
       panel.mesh.updateMatrixWorld(true);
@@ -183,22 +174,20 @@ export class Arc {
     ctx.fillText(words.join(' '), x, y + 44, width);
   }
 
-  private slotAt(ray: THREE.Ray) {
-    return this.cards.findIndex(({ panel }) => panel.hit(ray));
+  private slotAt({ ray, far }: LimitedRay) {
+    return this.cards.findIndex(({ panel }) => panel.hit(ray, far));
   }
 
-  press(ray: THREE.Ray): boolean {
-    const slot = this.slotAt(ray);
+  press(pick: LimitedRay): boolean {
+    const slot = this.slotAt(pick);
     if (slot < 0) return false;
     this.cards[slot].item.run();
     return true;
   }
 
-  update(rays: THREE.Ray[]) {
+  update(picks: LimitedRay[]) {
     if (!this.opened) return;
-    this.camera.getWorldPosition(head);
-    if (Math.hypot(head.x - centre.x, head.z - centre.z) > WALK_AWAY) return this.close();
-    const slot = rays.reduce((found, ray) => (found >= 0 ? found : this.slotAt(ray)), -1);
+    const slot = picks.reduce((found, pick) => (found >= 0 ? found : this.slotAt(pick)), -1);
     if (slot === this.hovered) return;
     const before = this.hovered;
     this.hovered = slot;

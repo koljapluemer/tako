@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 740" width="1120" height="740" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">tako VR controls on Meta Quest controllers</title>
+  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap inspects or presses. Grip grabs the mini model. The left thumbstick and the X, Y, A and B buttons are unused.</desc>
+  <defs>
+    <g id="controller">
+      <!-- Trigger, behind the body; its colour comes from the use element -->
+      <path d="M300 372 C322 384 338 410 332 446 C328 466 306 462 300 444 C296 420 286 400 276 396 Z"/>
+      <!-- Body -->
+      <path d="M118 236 C150 206 262 204 298 240 C328 272 330 348 300 384 C284 402 268 410 264 436 C258 500 254 590 244 650 C240 682 170 688 158 652 C140 590 128 490 108 400 C88 350 86 270 118 236 Z" fill="#e7e5e0" stroke="#57534e" stroke-width="2"/>
+      <ellipse cx="205" cy="310" rx="98" ry="76" fill="#d6d3cd"/>
+      <!-- Grip -->
+      <path d="M263 470 C274 500 270 590 256 625 L240 620 C250 580 252 510 248 475 Z" fill="#2563eb"/>
+      <!-- Thumbstick, unbound unless drawn over -->
+      <circle cx="160" cy="290" r="38" fill="#a8a29e"/>
+      <circle cx="160" cy="290" r="27" fill="#c4c0ba"/>
+      <!-- Face buttons, unbound -->
+      <circle cx="245" cy="282" r="21" fill="#b8b4ae"/>
+      <circle cx="232" cy="342" r="21" fill="#b8b4ae"/>
+      <!-- Menu / Meta, unbound -->
+      <circle cx="172" cy="360" r="9" fill="#a8a29e"/>
+    </g>
+  </defs>
+
+  <rect width="1120" height="740" fill="#fafaf7"/>
+
+  <text x="560" y="44" text-anchor="middle" font-size="26" font-weight="700" fill="#1c1917">tako VR controls</text>
+  <text x="560" y="70" text-anchor="middle" font-size="14" fill="#57534e">Meta Quest controllers. Right hand moves you, left hand places the model.</text>
+
+  <!-- Leaders -->
+  <g fill="none" stroke-width="1.75" stroke-linejoin="round">
+    <polyline stroke="#0f766e" points="960,252 960,150 740,150"/>
+    <polyline stroke="#dc2626" points="794,425 770,425 770,285 740,285"/>
+    <polyline stroke="#7c3aed" points="326,425 350,425 350,395 380,395"/>
+    <polyline stroke="#2563eb" points="262,545 320,545 320,505 380,505"/>
+    <polyline stroke="#2563eb" points="858,545 800,545 800,505 740,505"/>
+  </g>
+
+  <use href="#controller" xlink:href="#controller" fill="#7c3aed"/>
+  <use href="#controller" xlink:href="#controller" fill="#dc2626" transform="matrix(-1 0 0 1 1120 0)"/>
+
+  <!-- Right thumbstick is the only bound stick -->
+  <circle cx="960" cy="290" r="27" fill="#0f766e"/>
+  <circle cx="960" cy="290" r="18" fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.5"/>
+
+  <!-- Button letters are outside the mirrored group so they read correctly -->
+  <g font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">
+    <text x="245" y="288">Y</text>
+    <text x="232" y="348">X</text>
+    <text x="875" y="288">B</text>
+    <text x="888" y="348">A</text>
+  </g>
+  <g font-size="13" fill="#57534e" text-anchor="middle">
+    <text x="200" y="712">Left</text>
+    <text x="920" y="712">Right</text>
+  </g>
+
+  <!-- Right thumbstick -->
+  <rect x="380" y="96" width="360" height="116" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.75"/>
+  <text x="396" y="122" font-size="16" font-weight="700" fill="#0f766e">Right thumbstick</text>
+  <g font-size="14" fill="#44403c">
+    <text x="396" y="150"><tspan font-weight="600">Left / right:</tspan> snap turn 30°</text>
+    <text x="396" y="172"><tspan font-weight="600">While aiming a teleport:</tspan></text>
+    <text x="396" y="194">choose which way you face on landing</text>
+  </g>
+
+  <!-- Right trigger -->
+  <rect x="380" y="228" width="360" height="104" rx="10" fill="#ffffff" stroke="#dc2626" stroke-width="1.75"/>
+  <text x="396" y="254" font-size="16" font-weight="700" fill="#dc2626">Right trigger</text>
+  <text x="502" y="254" font-size="16" font-weight="700" fill="#1c1917">Teleport</text>
+  <g font-size="14" fill="#44403c">
+    <text x="396" y="279"><tspan font-weight="600">Hold:</tspan> aim with a curved beam</text>
+    <text x="396" y="300"><tspan font-weight="600">Release:</tspan> teleport there</text>
+    <text x="396" y="321"><tspan font-weight="600">Tap:</tspan> inspect an element, or press a panel</text>
+  </g>
+
+  <!-- Left trigger -->
+  <rect x="380" y="348" width="360" height="104" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="1.75"/>
+  <text x="396" y="374" font-size="16" font-weight="700" fill="#7c3aed">Left trigger</text>
+  <text x="494" y="374" font-size="16" font-weight="700" fill="#1c1917">Model and revisions</text>
+  <g font-size="14" fill="#44403c">
+    <text x="396" y="399"><tspan font-weight="600">Hold:</tspan> aim at the floor with a straight beam</text>
+    <text x="396" y="420"><tspan font-weight="600">Release:</tspan> place them there, replacing any old one</text>
+    <text x="396" y="441"><tspan font-weight="600">Tap:</tspan> inspect an element, or press a panel</text>
+  </g>
+
+  <!-- Grip -->
+  <rect x="380" y="468" width="360" height="84" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="1.75"/>
+  <text x="396" y="494" font-size="16" font-weight="700" fill="#2563eb">Grip</text>
+  <text x="440" y="494" font-size="13" fill="#57534e">middle finger, on the mini model</text>
+  <g font-size="14" fill="#44403c">
+    <text x="396" y="517"><tspan font-weight="600">One hand:</tspan> spin</text>
+    <text x="396" y="539"><tspan font-weight="600">Two hands:</tspan> move, zoom and turn</text>
+  </g>
+
+  <!-- Notes -->
+  <g font-size="13" fill="#57534e" text-anchor="middle">
+    <text x="560" y="582">Next to the placed model: Close, and Buildings to switch model.</text>
+    <text x="560" y="604">Touch or point at a pin on the mini model to go there.</text>
+    <text x="560" y="626">Hand tracking: each pinch acts as that hand's trigger.</text>
+    <text x="560" y="648">Left thumbstick, X, Y, A, B and Menu aren't used by tako.</text>
+  </g>
+</svg>

@@ -2,13 +2,17 @@ import * as THREE from 'three';
 
 const raycaster = new THREE.Raycaster();
 
+/** A pointing ray and how far it can see, usually up to the first wall. */
+export type LimitedRay = { ray: THREE.Ray; far: number };
+
 /** Flat world-space UI: the DOM doesn't exist in an immersive session. */
 export class CanvasPanel {
   readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   readonly ctx: CanvasRenderingContext2D;
   private texture: THREE.CanvasTexture;
 
-  constructor(readonly width: number, readonly height: number, pixelsPerMetre = 1000) {
+  /** `depthTest`: true for UI that is part of the building, which walls should hide. */
+  constructor(readonly width: number, readonly height: number, { pixelsPerMetre = 1000, depthTest = false } = {}) {
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(width * pixelsPerMetre);
     canvas.height = Math.round(height * pixelsPerMetre);
@@ -17,7 +21,7 @@ export class CanvasPanel {
     this.texture.colorSpace = THREE.SRGBColorSpace;
     this.mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(width, height),
-      new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthTest: false, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthTest, depthWrite: false }),
     );
     this.mesh.renderOrder = 9000;
     this.mesh.visible = false;
@@ -36,11 +40,12 @@ export class CanvasPanel {
   }
 
   /** Hit position in canvas pixels, or null. */
-  hit(ray: THREE.Ray): { x: number; y: number } | null {
+  hit(ray: THREE.Ray, far = Infinity): { x: number; y: number; distance: number } | null {
     if (!this.mesh.visible) return null;
     raycaster.ray.copy(ray);
-    const uv = raycaster.intersectObject(this.mesh, false)[0]?.uv;
-    return uv ? { x: uv.x * this.canvasWidth, y: (1 - uv.y) * this.canvasHeight } : null;
+    raycaster.far = far;
+    const found = raycaster.intersectObject(this.mesh, false)[0];
+    return found?.uv ? { x: found.uv.x * this.canvasWidth, y: (1 - found.uv.y) * this.canvasHeight, distance: found.distance } : null;
   }
 
   dispose() {

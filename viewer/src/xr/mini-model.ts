@@ -2,11 +2,9 @@ import * as THREE from 'three';
 import type { NavMesh } from '../collision';
 import type { NavLevel, NavPoint } from '../nav/points';
 import { PinPress, turntableDelta, twoHandPlacement, visiblePins, type Placement, type Vec3 } from './mini-gestures';
-import { CanvasPanel } from './panel';
+import { CanvasPanel, type LimitedRay } from './panel';
 
 const LONGEST_SIDE = 0.55;
-const DISTANCE = 0.5;
-const BELOW_HEAD = 0.55;
 const LEVEL_GAP = 0.13;
 const WALL_HEIGHT_M = 2.2;
 const GRAB_MARGIN = 0.06;
@@ -14,7 +12,7 @@ const WELD = 0.05;
 const STEM = 0.03;
 const PIN_RADIUS = 0.012;
 const RAY_SNAP = Math.sin(THREE.MathUtils.degToRad(5));
-/** Late enough to draw over the whole building, early enough to stay under UI panels. */
+/** After the building's own glass, before UI panels. */
 const RENDER_ORDER = 8400;
 
 const COLOR = { floor: 0xc9d4de, wall: 0x7d8a96, pin: 0x35d0ff, entrance: 0x7dff9b, stair: 0xffc14d, hover: 0xffffff, you: 0xff5a5a };
@@ -25,7 +23,7 @@ export type MiniInput = {
   user: { x: number; y: number; z: number; yaw: number };
   grabs: Hand[];
   tips: Hand[];
-  rays: THREE.Ray[];
+  picks: LimitedRay[];
 };
 
 const toVec = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
@@ -77,13 +75,11 @@ function material(color: number, opacity: number) {
 
 /**
  * The world in miniature. Built from the navmesh rather than the building, so it
- * stays cheap on any model. Clears depth before drawing: a nearby wall must not
- * cut through it, but it still needs depth of its own.
+ * stays cheap on any model. It stands in the building like any object: walls hide it.
  */
 export class MiniModel {
   private root = new THREE.Group();
   private content = new THREE.Group();
-  private depthClear: THREE.Mesh;
   private marker: THREE.Mesh;
   private label = new CanvasPanel(0.2, 0.05);
   private levelMeshes: Array<{ floor: THREE.Mesh; walls: THREE.Mesh }> = [];
@@ -112,37 +108,40 @@ export class MiniModel {
   onCommit: (point: NavPoint) => void = () => {};
 
   constructor(scene: THREE.Scene) {
-    this.depthClear = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ transparent: true }));
-    this.depthClear.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
-    this.depthClear.frustumCulled = false;
-    this.depthClear.renderOrder = RENDER_ORDER - 1;
-    this.depthClear.onBeforeRender = (renderer) => renderer.clearDepth();
-
     this.marker = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.035, 12).rotateX(-Math.PI / 2), material(COLOR.you, 1));
     this.marker.renderOrder = RENDER_ORDER + 2;
 
     this.label.mesh.renderOrder = RENDER_ORDER + 3;
-    this.root.add(this.depthClear, this.content, this.marker);
+    this.root.add(this.content, this.marker);
     this.root.visible = false;
     scene.add(this.root, this.label.mesh);
   }
 
-  get available() {
+  private get available() {
     return this.nav != null && this.levels.length > 0;
   }
 
+  /** Stays open across a revision swap: empty until the new navmesh arrives. */
   setData(nav: NavMesh | null, points: NavPoint[], levels: NavLevel[]) {
     this.nav = nav;
     this.points = points;
     this.levels = levels;
     this.built = false;
-    if (this.opened) {
-      if (this.available) this.build();
-      else this.close();
-    }
+    if (!this.opened) return;
+    this.clear();
+    this.grabs.clear();
+    this.twoHand = null;
+    this.lastGrab = null;
+    this.showIfReady();
+  }
+
+  private showIfReady() {
+    if (this.available && !this.built) this.build();
+    this.root.visible = this.built;
   }
 
   private clear() {
+    this.highlight(null);
     for (const child of [...this.content.children]) {
       this.content.remove(child);
       (child as THREE.Mesh).geometry?.dispose();
@@ -207,41 +206,35 @@ export class MiniModel {
     return out;
   }
 
-  /** The position is reset each time; the ray only picks the direction. */
-  open(ray: THREE.Ray, head: THREE.Vector3) {
-    if (!this.available) return;
-    if (!this.built) this.build();
-    const forward = point.copy(ray.direction).setY(0);
-    if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
-    forward.normalize();
-    this.root.position.set(head.x + forward.x * DISTANCE, head.y - BELOW_HEAD, head.z + forward.z * DISTANCE);
+  /** Aligned with the building, so directions in the model match the real ones. */
+  open(position: THREE.Vector3) {
+    this.root.position.copy(position);
     this.root.rotation.set(0, 0, 0);
     this.zoom = 1;
     this.root.scale.setScalar(1);
     this.grabs.clear();
     this.twoHand = null;
     this.lastGrab = null;
-    this.root.visible = true;
     this.opened = true;
     this.shownZoom = 0;
+    this.showIfReady();
   }
 
   close() {
     this.opened = false;
     this.root.visible = false;
-    this.label.mesh.visible = false;
+    this.highlight(null);
     this.grabs.clear();
     this.twoHand = null;
   }
 
-  toggle(ray: THREE.Ray, head: THREE.Vector3) {
-    if (this.opened) this.close();
-    else this.open(ray, head);
+  translate(shift: THREE.Vector3) {
+    this.root.position.add(shift);
   }
 
   /** Returns true when the hand is close enough to take hold of the model. */
   grabStart(id: number, position: THREE.Vector3): boolean {
-    if (!this.opened) return false;
+    if (!this.opened || !this.built) return false;
     if (Math.hypot(position.x - this.root.position.x, position.z - this.root.position.z) > this.radius * this.zoom + GRAB_MARGIN) return false;
     this.grabs.set(id, position.clone());
     this.twoHand = null;
@@ -256,14 +249,14 @@ export class MiniModel {
   }
 
   /** Ray fallback: snaps to the nearest pin in the pointing direction. */
-  press(ray: THREE.Ray): boolean {
+  press({ ray, far }: LimitedRay): boolean {
     if (!this.opened) return false;
     let best: Pin | null = null;
     let bestDistance = Infinity;
     for (const pin of this.shown) {
       pin.mesh.getWorldPosition(point);
       const along = point.sub(ray.origin).dot(ray.direction);
-      if (along <= 0) continue;
+      if (along <= 0 || along > far) continue;
       const sideways = Math.sqrt(Math.max(point.lengthSq() - along * along, 0));
       if (sideways / along < RAY_SNAP && sideways < bestDistance) {
         best = pin;
@@ -276,18 +269,17 @@ export class MiniModel {
   }
 
   private commit(pin: Pin) {
-    this.close();
     this.onCommit(pin.point);
   }
 
-  update({ user, grabs, tips, rays }: MiniInput) {
-    if (!this.opened) return;
+  update({ user, grabs, tips, picks }: MiniInput) {
+    if (!this.opened || !this.built) return;
     this.applyGrabs(grabs);
     this.root.updateMatrixWorld(true);
     this.updateLevel(user);
     this.refreshPins();
     this.updateMarker(user);
-    if (!this.updatePins(tips)) this.updateHover(rays);
+    if (!this.updatePins(tips)) this.updateHover(picks);
   }
 
   private applyGrabs(hands: Hand[]) {
@@ -364,13 +356,13 @@ export class MiniModel {
     return touched != null;
   }
 
-  private updateHover(rays: THREE.Ray[]) {
+  private updateHover(picks: LimitedRay[]) {
     let best: Pin | null = null;
-    for (const ray of rays) {
+    for (const { ray, far } of picks) {
       for (const pin of this.shown) {
         pin.mesh.getWorldPosition(point);
         const along = point.sub(ray.origin).dot(ray.direction);
-        if (along > 0 && Math.sqrt(Math.max(point.lengthSq() - along * along, 0)) / along < RAY_SNAP) best ??= pin;
+        if (along > 0 && along <= far && Math.sqrt(Math.max(point.lengthSq() - along * along, 0)) / along < RAY_SNAP) best ??= pin;
       }
     }
     this.highlight(best);

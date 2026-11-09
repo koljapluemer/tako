@@ -34,9 +34,10 @@ provisional until those results are in.
 | Area | Where | State |
 |---|---|---|
 | Natural walking | `viewer/src/xr/walking.ts` | Head tracked 1:1, rig follows floor height, walls fade to black rather than pushing the user |
-| Teleport | `viewer/src/xr/teleport.ts` | Arc, landing validation, fade, hold or stick aiming, choice of facing |
+| Teleport and placement | `viewer/src/xr/floor-aim.ts`, `viewer/src/xr/trigger.ts` | Hold-to-aim paths, landing validation, one job per hand, choice of facing on the right stick |
+| Station | `viewer/src/xr/station.ts` | Mini model, revision cards and their buttons, anchored on the floor |
 | Collision | `viewer/src/collision.ts` | BVH built in the worker, floor and solid parts |
-| Menu | `viewer/src/xr/menu.ts` | Body-locked button, picker for hand input, notices |
+| Notices | `viewer/src/xr/notice.ts` | Status text in the headset |
 | Position across revisions | `XRWalk.setModel` in `viewer/src/xr/session.ts` | Preserved, including origin shifts; lost when switching files |
 
 Known gaps:
@@ -48,16 +49,19 @@ Known gaps:
 
 ## Interaction design
 
-### Opening things
+### Placing the station
 
-- **Controllers:** two face buttons, one for the revision arc and one for the
-  mini model.
-- **Hands and other inputs without buttons:** the existing small body-locked
-  button, which opens a two-choice picker.
-- The pointer ray picks the direction only. Distance is clamped so objects stay
-  usable: 45-55 cm at about waist height for the mini model, 1-1.5 m for the
-  arc.
-- Both draw on top of the building, so a nearby wall cannot cut through them.
+See `vr-controls.svg` for the full mapping.
+
+- **Right trigger or pinch:** hold to aim a curved teleport, release to go. The
+  right stick chooses the landing direction while aiming and snap turns
+  otherwise.
+- **Left trigger or pinch:** hold to aim a straight ray at the floor, release to
+  place the station there. A new station replaces the old one.
+- The station turns to face the user once, when placed, and then stays put. It
+  holds the mini model at about waist height, with the cards behind it, and
+  Close and Buildings/Revisions buttons at either end of the cards.
+- It is an object in the building: walls hide it and block pressing it.
 
 ### Revision arc
 
@@ -65,8 +69,8 @@ Known gaps:
 - Each card shows a title and age, and the current version is marked. Long
   histories scroll sideways.
 - Selecting a card fades, swaps and keeps position. The arc stays open for A/B
-  comparison, and closes on walking away or pressing the control again.
-- A final "Other buildings" entry replaces the old "Switch building" row.
+  comparison, and closes only from the station's Close button.
+- The station's Buildings button swaps the cards for the list of buildings.
 
 ### Mini model (world-in-miniature)
 
@@ -86,7 +90,7 @@ Known gaps:
 | Ray | Fallback, snaps to the nearest pin |
 
 - Grab is `squeeze` on controllers and a pinch near the model with hands.
-  `session.ts` only listens for `select` today. Use `teleport.claim` so a grab
+  `session.ts` only listens for `select` today. Use `TriggerRouter.claim` so a grab
   cannot start a teleport.
 - Pins are small buttons on stems above their floor. Contact highlights and
   shows the name, pressing about 1 cm arms, lifting off commits, sliding off
