@@ -399,6 +399,8 @@ export class XRWalk {
 
   private placeAtSpawn() {
     this.needsPlacement = false;
+    // Here rather than in the frame loop: a model arriving during session start places the user too.
+    void this.fade.to('start', 0, 200);
     const spot = this.spawn.spot ?? this.besideModel();
     if (!spot) return;
     this.spawn.pin(spot);
@@ -469,7 +471,6 @@ export class XRWalk {
       if (++this.sessionFrames <= 2 || !this.model || !this.spaceReady) return this.fade.update(now);
       this.placeAtSpawn();
       this.rig.updateMatrixWorld(true);
-      void this.fade.to('start', 0, 200);
     }
     this.walking.update(dt);
     this.updateStickAims();

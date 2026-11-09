@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   changeRevision, exportModel, importProject, inspectElement, jumpToRevision, listProjects, listRevisions, loadNavigation, openProject, selectElement,
-  executeCommand, queryDocument, type LoadedModel, type OpenedDocument,
+  executeCommand, queryDocument, reviseEdit, type LoadedModel, type OpenedDocument,
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
@@ -343,7 +343,7 @@ refreshPicker().then((projects) => {
 
 const agentWindow = window as Window & { __takoAgentDisconnect?: () => void };
 agentWindow.__takoAgentDisconnect?.();
-agentWindow.__takoAgentDisconnect = connectAgent({
+const agent = connectAgent({
   document: () => activeDocument,
   status: setStatus,
   query: queryDocument,
@@ -353,6 +353,11 @@ agentWindow.__takoAgentDisconnect = connectAgent({
     return executed;
   },
   revision: (action, document) => changeRevision(action, document, setStatus),
+  revise: async (document, edit) => {
+    const revised = await reviseEdit(document, edit, setStatus);
+    modelCache.dropAfter(document.id, revised.document.revision - 1, current);
+    return revised;
+  },
   changed: async (opened, summary, ids) => {
     show(Promise.resolve(opened), { rev: opened.document.revision, summary, changed: ids }, false);
     await loading;
@@ -360,9 +365,10 @@ agentWindow.__takoAgentDisconnect = connectAgent({
     picker.value = opened.document.id;
   },
 });
+agentWindow.__takoAgentDisconnect = agent.disconnect;
 
 if (import.meta.env.DEV) {
   void addCorpusSamples().then(refreshPicker).catch(console.warn);
   // Test hook: lets browser automation read renderer stats and drive the session.
-  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument } });
+  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call } });
 }

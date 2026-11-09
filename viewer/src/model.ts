@@ -3,7 +3,7 @@ import { Collision, NavMesh } from './collision';
 import type { NavLevel, NavPoint } from './nav/points';
 import {
   PROTOCOL_VERSION,
-  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary, type RevisionInfo,
+  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary, type RevisionInfo, type TextReplacement,
   type StoreyInfo, type WorkerRequest, type WorkerResponse,
 } from './worker-protocol';
 
@@ -199,6 +199,19 @@ export async function changeRevision(
   onProgress = progress;
   const reply = await request<Extract<Reply, { type: 'executed' }>>({
     type: action, documentId: document.documentId, baseRevision: document.revision,
+  });
+  workerDocument = reply.document;
+  return { document: reply.document, model: build(reply.result), command: reply.command };
+}
+
+export async function reviseEdit(
+  document: DocumentSummary,
+  edit: { editId: string; values: Record<string, unknown>; replacements: TextReplacement[] },
+  progress: (message: string) => void,
+): Promise<OpenedDocument & { command: Extract<Reply, { type: 'executed' }>['command'] }> {
+  onProgress = progress;
+  const reply = await request<Extract<Reply, { type: 'executed' }>>({
+    type: 'revise', documentId: document.documentId, baseRevision: document.revision, ...edit,
   });
   workerDocument = reply.document;
   return { document: reply.document, model: build(reply.result), command: reply.command };

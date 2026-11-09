@@ -6,7 +6,7 @@ Status: architecture options and migration plan, not an implementation specifica
 
 The recommended end state is a static web application whose IFC document, semantic index, edit recipes, validation, history and persistence all run in a dedicated browser worker, implemented in TypeScript on `web-ifc`. Keep a very small local TypeScript MCP bridge only for the current external-chat workflow. The bridge should transport tool calls and events; it must not own the model or contain IFC business rules.
 
-Do **not** make Pyodide + IfcOpenShell the production architecture. It is the fastest way to prove that a browser can reproduce the current Python behavior, and may be valuable as a temporary differential-testing oracle, but it moves rather than removes the large runtime and memory cost. IfcOpenShell's own documentation calls its browser technology preview “incredibly heavy” and warns of a long load time, even though it exposes the full API ([IfcOpenShell WebAssembly installation notes](https://docs.ifcopenshell.org/ifcopenshell-python/installation.html#web-assembly)).
+**Update 2026-11-09:** arbitrary natural-language edits are the purpose of the app, so scripted edits run on IfcOpenShell in a Pyodide worker (`viewer/src/python/`), loaded on the first script. `web-ifc` remains the viewer's engine and the owner of the open document; Python takes IFC bytes and returns IFC bytes, and the result is committed through the same `execute()` transaction as every other command. This replaces the earlier decision against Pyodide, and the closed edit-plan IR described below is no longer planned, because any closed list would make unlisted edits impossible. The wheel is pinned to 0.8.5 because 0.9.0.post1 crashes in `ifcopenshell.open` on Pyodide 0.29. Scripts are not yet isolated from the page's origin.
 
 This recommendation deliberately separates two questions:
 
@@ -144,13 +144,9 @@ There are three viable product shapes:
 
 Do not let the relay cache an authoritative IFC or reimplement recipe validation. Pairing should bind a client session to an origin, tab and random capability; tool results should include document ID and revision so late responses cannot land on a different model.
 
-### Replacing `run_ifcopenshell`
+### `run_ifcopenshell`
 
-Arbitrary Python execution is not a feature that can be faithfully rewritten as ordinary TypeScript recipes. Shipping Pyodide only for this escape hatch defeats much of the size/memory objective, while `eval`-style JavaScript would couple generated code to unstable internals and make commands non-replayable.
-
-Replace it with a versioned edit-plan IR composed of tested primitives: create entity, clone shared graph, create representation, place product, relate/unrelate, set typed attribute/property, assign material/style, and declare affected elements. The plan is validated before execution and recorded in history. `kit_help` becomes machine-readable primitive documentation plus examples. Operations that cannot be expressed in the IR should first become a tested primitive; they should not receive unrestricted access to the document worker.
-
-This is not primarily a sandboxing argument. Deterministic, serializable operations are required for undo/replay, migration, differential tests, crash recovery and future collaboration.
+`run_ifcopenshell` runs Python with `f`, `si`, `kit`, `ifcopenshell`, `api`, `ue` and `PARAMS`. The script and its `params` are stored in the revision history, and `revise_edit` reruns them against the parent revision so a follow-up stays one undo step. The kit, worked examples and verification remain the reliability layer: common operations should be promoted into tested kit functions, following `doc/professional-design-operations.md`, while anything else stays possible through a script.
 
 ## Performance and platform warnings
 

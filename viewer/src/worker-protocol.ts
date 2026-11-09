@@ -80,7 +80,8 @@ export type DocumentCommand =
   | { kind: 'setProperty'; targets: CommandTarget[]; params: { pset: string; name: string; value: string | number | boolean } }
   | { kind: 'resizeFilling'; targets: CommandTarget[]; params: { width?: number; height?: number; anchor: 'center' } }
   | { kind: 'moveElements'; targets: CommandTarget[]; params: { x: number; y: number; z: number } }
-  | { kind: 'deleteElements'; targets: CommandTarget[]; params: { confirmationToken: string } };
+  | { kind: 'deleteElements'; targets: CommandTarget[]; params: { confirmationToken: string } }
+  | { kind: 'script'; targets: CommandTarget[]; params: { code: string; summary: string; values: Record<string, unknown> } };
 
 export type RevisionInfo = { revision: number; title: string; createdAt: string | null; current: boolean };
 
@@ -91,6 +92,8 @@ export type CommandResult = {
   summary: string;
   changed: number[];
   warnings: string[];
+  /** Scripted edits only: what the script printed. */
+  output?: string;
 };
 
 export type AgentQuery =
@@ -99,7 +102,11 @@ export type AgentQuery =
   | { method: 'get_element'; params: { element: string } }
   | { method: 'context_around'; params: { target: string; radius?: number; limit?: number } }
   | { method: 'get_focus'; params?: Record<string, never> }
-  | { method: 'list_materials'; params?: Record<string, never> };
+  | { method: 'list_materials'; params?: Record<string, never> }
+  | { method: 'kit_help'; params: { topic?: string } }
+  | { method: 'inspect_with_script'; params: { code: string; values: Record<string, unknown> } };
+
+export type TextReplacement = { old: string; new: string };
 
 type RequestBase = { protocolVersion: typeof PROTOCOL_VERSION; id: number };
 
@@ -113,6 +120,7 @@ export type WorkerRequest =
   | (RequestBase & { type: 'select'; expressID: number | null })
   | (RequestBase & { type: 'exportProject' })
   | (RequestBase & { type: 'execute'; documentId: string; baseRevision: number; command: DocumentCommand; title?: string })
+  | (RequestBase & { type: 'revise'; documentId: string; baseRevision: number; editId: string; values: Record<string, unknown>; replacements: TextReplacement[] })
   | (RequestBase & { type: 'undo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'redo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'navigation'; token: number })

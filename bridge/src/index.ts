@@ -53,14 +53,14 @@ function callBrowser(name: string, args: Record<string, unknown>): Promise<unkno
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`browser tool ${name} timed out`));
-    }, 120_000);
+    }, 300_000);
     pending.set(id, { resolve, reject, timer });
     browser!.send(JSON.stringify({ type: 'tool', id, name, args }));
   });
 }
 
 const server = new McpServer({ name: 'tako-ifc', version: '0.2.0' }, {
-  instructions: `Edit the IFC building open in the user's tako browser. Resolve references with find_elements and context_around; do not rely on authoring-tool names. Facts report their source. Use get_focus for "this" and follow-up context. All lengths are metres. The browser owns the model and revisions.`,
+  instructions: `Edit the IFC building open in the user's tako browser. Resolve references with find_elements and context_around; do not rely on authoring-tool names. Facts report their source. Use get_focus for "this" and follow-up context. Prefer the dedicated tools; for anything else, use context_around and kit_help first, then run_ifcopenshell with the kit. Follow-ups on the latest edit use revise_edit. All lengths are metres. The browser owns the model and revisions.`,
 });
 
 const ok = (result: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });
@@ -108,6 +108,19 @@ tool('move_elements', 'Move products by a metre offset in IFC x/y/z coordinates 
 tool('delete_elements', 'Delete elements and direct relationships. Requires the literal confirmation token CONFIRM_DELETE after user approval.', {
   elements: z.array(z.string()).min(1), confirmation_token: z.literal('CONFIRM_DELETE'),
   title,
+});
+tool('run_ifcopenshell', 'Run Python against the open model, for any edit or question no other tool covers. Names available: f (ifcopenshell.file), si (SpatialIndex, built on first use: si.facts[id] has world bbox, storey, exterior, host; si.rooms has the IfcSpaces), kit (building blocks in metres; see kit_help), ifcopenshell, api (ifcopenshell.api), ue (ifcopenshell.util.element), PARAMS. Assign a list of changed expressIDs to `changed` so the viewer highlights them and they are verified. Print to return output. The model is rolled back if the code raises. Use commit=false for read-only inspection. Put sizes and options in params and read them from PARAMS, so a follow-up can change them with revise_edit.', {
+  code: z.string().min(1), summary: z.string().min(1).describe('What the edit did.'),
+  commit: z.boolean().default(true), params: z.record(z.string(), z.unknown()).optional(),
+  title,
+});
+tool('kit_help', 'Reference for the kit used in run_ifcopenshell. No topic: all functions and example names. A topic: one function\'s docs, or a complete worked example. Read the matching example before writing a modelling script.', {
+  topic: z.string().optional(),
+});
+tool('revise_edit', 'Redo the latest edit with changes instead of undoing and starting over; it stays one undo step. Use for follow-ups like "only the left side" or "make it wider".', {
+  edit_id: z.string().describe('commandId from the edit result, or latest_edit.commandId from get_focus.'),
+  params: z.record(z.string(), z.unknown()).optional().describe('Parameters to change; others keep their values.'),
+  replacements: z.array(z.object({ old: z.string(), new: z.string() })).optional().describe('Script edits only; each old text must occur exactly once.'),
 });
 tool('undo', 'Move the browser project back one revision.', {});
 tool('redo', 'Move the browser project forward one revision.', {});

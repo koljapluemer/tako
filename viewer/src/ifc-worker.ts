@@ -15,7 +15,8 @@ import {
   commitProject, exportProject, importProject, listProjects, loadRevision, openProject, saveFocus,
   type HistoryEntry, type ProjectManifest,
 } from './project-store';
-import { PROTOCOL_VERSION, type AgentQuery, type DocumentCommand, type NavBuild } from './worker-protocol';
+import { kitHelp, runScript } from './python/client';
+import { PROTOCOL_VERSION, type AgentQuery, type CommandResult, type DocumentCommand, type NavBuild, type TextReplacement } from './worker-protocol';
 import type {
   Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, RevisionInfo, Rgba, StoreyInfo,
   WorkerRequest, WorkerResponse,
@@ -471,8 +472,15 @@ function resolveFact(reference: string): SemanticFact {
 const boxGap = (a: SemanticFact, b: SemanticFact) => Math.hypot(...([0, 1, 2].map((i) =>
   Math.max(a.min[i] - b.max[i], b.min[i] - a.max[i], 0))));
 
+const reportProgress = (message: string) => post({ type: 'progress', message });
+
 async function queryAgent(query: AgentQuery): Promise<unknown> {
+  if (query.method === 'kit_help') return kitHelp(query.params.topic, reportProgress);
   const current = requireDocument();
+  if (query.method === 'inspect_with_script') {
+    const { output } = await runScript(api.SaveModel(openModel!), query.params.code, query.params.values, false, reportProgress);
+    return { ok: true, output, committed: false };
+  }
   if (query.method === 'model_overview') {
     const counts: Record<string, number> = {};
     for (const fact of semanticFacts.values()) counts[fact.ifcClass] = (counts[fact.ifcClass] ?? 0) + 1;
@@ -578,7 +586,15 @@ function metresPerModelUnit(): number {
   return 1;
 }
 
-function applyCommand(command: DocumentCommand): { changed: number[]; summary: string } {
+type Applied = { changed: number[]; summary: string; bytes?: Uint8Array; warnings?: string[]; output?: string };
+
+async function applyScript(command: Extract<DocumentCommand, { kind: 'script' }>, model: Uint8Array): Promise<Applied> {
+  const { code, summary, values } = command.params;
+  const result = await runScript(model, code, values, true, reportProgress);
+  return { summary, changed: result.changed, bytes: result.bytes, warnings: result.verify.problems, output: result.output };
+}
+
+function applyCommand(command: Exclude<DocumentCommand, { kind: 'script' }>): Applied {
   if (openModel == null) throw new Error('no project is open');
   const ids = [...new Set(command.targets.map(targetId))];
   if (!ids.length) throw new Error('the command has no targets');
@@ -782,9 +798,9 @@ async function execute(command: DocumentCommand, standalone: number[] = [], titl
   const before = api.SaveModel(openModel);
   let phase = 'apply command';
   try {
-    const applied = applyCommand(command);
+    const applied = command.kind === 'script' ? await applyScript(command, before) : applyCommand(command);
     phase = 'serialize candidate';
-    const saved = api.SaveModel(openModel);
+    const saved = applied.bytes ?? api.SaveModel(openModel);
     // Saving is not sufficient: reopen the candidate before making it durable.
     api.CloseModel(openModel);
     phase = 'reopen candidate';
@@ -800,15 +816,57 @@ async function execute(command: DocumentCommand, standalone: number[] = [], titl
     await commitProject(current, history, saved);
     phase = 'rebuild geometry';
     const rendered = await render(standalone.length ? standalone : applied.changed);
-    return {
-      rendered,
-      command: { ok: true as const, commandId, revision: current.revision, summary: applied.summary, changed: applied.changed, warnings: [] },
+    const result: CommandResult = {
+      ok: true, commandId, revision: current.revision, summary: applied.summary, changed: applied.changed,
+      warnings: applied.warnings ?? [], output: applied.output,
     };
+    return { rendered, command: result };
   } catch (error) {
     if (openModel != null) api.CloseModel(openModel);
     openModel = api.OpenModel(before, { COORDINATE_TO_ORIGIN: true });
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     throw new Error(`${phase}: ${detail}`);
+  }
+}
+
+function revisedCommand(command: DocumentCommand, values: Record<string, unknown>, replacements: TextReplacement[]): DocumentCommand {
+  if (command.kind !== 'script') {
+    if (replacements.length) throw new Error('replacements only apply to script edits; pass params');
+    return { ...command, params: { ...command.params, ...values } } as DocumentCommand;
+  }
+  let code = command.params.code;
+  for (const { old, new: text } of replacements) {
+    const count = code.split(old).length - 1;
+    if (count !== 1) throw new Error(`text occurs ${count} times, expected once: ${old.slice(0, 80)}`);
+    code = code.replace(old, () => text);
+  }
+  return { ...command, params: { ...command.params, code, values: { ...command.params.values, ...values } } };
+}
+
+/** Reruns the latest edit on the revision before it, replacing it so it stays one undo step. */
+async function revise(editId: string, values: Record<string, unknown>, replacements: TextReplacement[]) {
+  const current = requireDocument();
+  const last = history[current.cursor - 1];
+  if (!last || last.commandId !== editId) {
+    throw new Error(`only the latest edit can be revised (latest: ${last?.commandId ?? 'none'}). Undo back to it, or make a new edit.`);
+  }
+  if (openModel == null) throw new Error('no project is open');
+  const command = revisedCommand(last.command as DocumentCommand, values, replacements);
+  const parent = current.cursor - 1;
+  const latest = api.SaveModel(openModel);
+  const parentData = await loadRevision(current.id, parent);
+  api.CloseModel(openModel);
+  openModel = api.OpenModel(parentData, { COORDINATE_TO_ORIGIN: true });
+  current.revision = parent;
+  current.cursor = parent;
+  try {
+    return await execute(command, [], last.title);
+  } catch (error) {
+    if (openModel != null) api.CloseModel(openModel);
+    openModel = api.OpenModel(latest, { COORDINATE_TO_ORIGIN: true });
+    current.revision = parent + 1;
+    current.cursor = parent + 1;
+    throw error;
   }
 }
 
@@ -902,6 +960,13 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         post({
           type: 'executed', id: request.id, document: document(), command: executed.command, result: executed.rendered.result,
         }, executed.rendered.transfer);
+      } else if (request.type === 'revise') {
+        requireDocument(request.documentId, request.baseRevision);
+        await ensureOpen();
+        const revised = await revise(request.editId, request.values, request.replacements);
+        post({
+          type: 'executed', id: request.id, document: document(), command: revised.command, result: revised.rendered.result,
+        }, revised.rendered.transfer);
       } else if (request.type === 'listRevisions') {
         post({ type: 'revisions', id: request.id, revisions: revisions() });
       } else if (request.type === 'jumpRevision') {
