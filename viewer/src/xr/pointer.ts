@@ -27,6 +27,13 @@ export function headYaw(camera: THREE.Camera): number {
   return Math.atan2(-d.x, -d.z);
 }
 
+/** The lower face button: X on the left controller, A on the right. */
+export function lowerFaceButtonDown(source: XRInputSource | null): boolean {
+  const pad = source?.gamepad;
+  if (!pad || source!.hand || pad.mapping !== 'xr-standard') return false;
+  return pad.buttons[4]?.pressed ?? false;
+}
+
 /** Thumbstick axes; xr-standard puts them at 2/3, some older mappings at 0/1. */
 export function stick(source: XRInputSource | null): [number, number] | null {
   const pad = source?.gamepad;

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 740" width="1120" height="740" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">tako VR controls on Meta Quest controllers</title>
-  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap presses a panel. Grip grabs the mini model. The left thumbstick and the X, Y, A and B buttons are unused.</desc>
+  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap presses a panel. Grip grabs the mini model. Holding X returns to the start.</desc>
   <defs>
     <g id="controller">
       <!-- Trigger, behind the body; its colour comes from the use element -->
@@ -41,6 +41,10 @@
   <!-- Right thumbstick is the only bound stick -->
   <circle cx="960" cy="290" r="27" fill="#0f766e"/>
   <circle cx="960" cy="290" r="18" fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.5"/>
+
+  <!-- X returns to the start -->
+  <circle cx="232" cy="342" r="21" fill="#b45309"/>
+  <polyline fill="none" stroke="#b45309" stroke-width="1.75" stroke-linejoin="round" points="232,363 232,598 380,598"/>
 
   <!-- Button letters are outside the mirrored group so they read correctly -->
   <g font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">
@@ -92,11 +96,9 @@
     <text x="396" y="539"><tspan font-weight="600">Two hands:</tspan> move, zoom and turn</text>
   </g>
 
-  <!-- Notes -->
-  <g font-size="13" fill="#57534e" text-anchor="middle">
-    <text x="560" y="582">Next to the placed model: Close, and Buildings to switch model.</text>
-    <text x="560" y="604">Touch or point at a pin on the mini model to go there.</text>
-    <text x="560" y="626">Hand tracking: each pinch acts as that hand's trigger.</text>
-    <text x="560" y="648">Left thumbstick, X, Y, A, B and Menu aren't used by tako.</text>
-  </g>
+  <!-- X button -->
+  <rect x="380" y="568" width="360" height="60" rx="10" fill="#ffffff" stroke="#b45309" stroke-width="1.75"/>
+  <text x="396" y="592" font-size="16" font-weight="700" fill="#b45309">X button</text>
+  <text x="472" y="592" font-size="16" font-weight="700" fill="#1c1917">Return to start</text>
+  <text x="396" y="614" font-size="14" fill="#44403c"><tspan font-weight="600">Hold:</tspan> until the ring fills</text>
 </svg>

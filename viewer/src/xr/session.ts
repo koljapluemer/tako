@@ -7,10 +7,13 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { Fade } from './fade';
 import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
+import { Hold } from './hold';
+import { HoldRing } from './hold-ring';
 import { Hud } from './hud';
-import { navReach, spawnLanding, storeyLandings, type Landing } from './landing';
+import { navReach, spawnLanding, storeyLandings } from './landing';
 import { Notice } from './notice';
-import { handOf, headYaw, pointerRay, stick, type Pointer } from './pointer';
+import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, type Pointer } from './pointer';
+import { Spawn, type Spot } from './spawn';
 import { Station } from './station';
 import { TriggerRouter } from './trigger';
 import { Walking } from './walking';
@@ -40,6 +43,7 @@ const MAX_RESCUE_DISTANCE = 30;
 const SNAP_ANGLE = THREE.MathUtils.degToRad(30);
 const SNAP_PRESS = 0.8;
 const SNAP_RELEASE = 0.3;
+const RETURN_HOLD_MS = 800;
 
 export class XRWalk {
   readonly rig = new THREE.Group();
@@ -53,10 +57,12 @@ export class XRWalk {
   private hud: Hud | null;
   private pointers: Pointer[] = [];
   private model: LoadedModel | null = null;
-  private spawn: (Landing & { yaw?: number }) | null = null;
+  private spawn = new Spawn();
   private needsPlacement = false;
   private spaceReady = false;
   private snapped = new WeakSet<Pointer>();
+  private returnHold = new Hold(RETURN_HOLD_MS);
+  private returnRing: HoldRing;
   /** The camera only carries the headset's pose once a frame has been rendered in the session. */
   private sessionFrames = 0;
   private previous = performance.now();
@@ -72,6 +78,7 @@ export class XRWalk {
     scene.add(this.rig);
 
     this.fade = new Fade(camera, !Hud.enabled());
+    this.returnRing = new HoldRing(camera);
     this.walking = new Walking(this.rig, camera, this.fade);
     const floorY = () => this.walking.floorY;
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
@@ -164,6 +171,7 @@ export class XRWalk {
     this.modelChangedInSession = false;
     this.previous = performance.now();
     this.needsPlacement = true;
+    this.spawn.release();
     this.sessionFrames = 0;
     this.fade.set('start', 1);
     this.spaceReady = false;
@@ -188,6 +196,8 @@ export class XRWalk {
     this.teleport.cancel();
     this.placement.cancel();
     this.trigger.locked = false;
+    this.returnHold.reset();
+    this.returnRing.set(0); // the camera goes back to the desktop view with its children
     this.walking.restoreDoors();
     this.notice.close();
     this.station.close();
@@ -261,11 +271,30 @@ export class XRWalk {
     this.rig.rotation.y += delta;
   }
 
-  private async travel({ point, yaw }: Destination, pointer?: Pointer) {
+  /** Holding X on the left controller goes back to the start; aiming or travelling takes priority. */
+  private updateReturnHold(now: number) {
+    const pointer = this.pointers.find((p) => handOf(p) === 'left' && lowerFaceButtonDown(p.source));
+    const blocked = this.trigger.locked || this.teleport.aiming || this.placement.aiming;
+    const progress = this.returnHold.update(pointer != null, now, blocked);
+    this.returnRing.set(progress);
+    if (progress === 1) void this.jump(() => this.returnToSpawn(), pointer);
+  }
+
+  /** An edit since the start may have put a wall on the spot or removed its floor. */
+  private returnToSpawn() {
+    this.placeAtSpawn();
+    this.revalidate();
+  }
+
+  private travel({ point, yaw }: Destination, pointer?: Pointer) {
+    return this.jump(() => this.placeHead(point, yaw), pointer);
+  }
+
+  private async jump(move: () => void, pointer?: Pointer) {
     if (this.trigger.locked) return;
     this.trigger.locked = true;
     await this.fade.to('teleport', 1, 90);
-    if (this.presenting) this.placeHead(point, yaw);
+    if (this.presenting) move();
     pulse(pointer?.source ?? null);
     await this.fade.to('teleport', 0, 120);
     this.trigger.locked = false;
@@ -292,7 +321,8 @@ export class XRWalk {
     this.walking.setModel(model.collision, model.doorCells);
     this.station.setCollision(model.collision);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
-    this.spawn = spawnLanding(landings);
+    if (switched) this.spawn.release();
+    this.spawn.offer(spawnLanding(landings));
     this.notice.close();
     this.station.setNavigation(null, [], []);
     if (model.nav) this.setNavigation(model); // a cached revision already has one
@@ -312,6 +342,7 @@ export class XRWalk {
     if (a[12] !== b[12] || a[13] !== b[13] || a[14] !== b[14]) {
       const shift = new THREE.Vector3(b[12] - a[12], b[13] - a[13], b[14] - a[14]);
       this.rig.position.add(shift);
+      this.spawn.translate(shift);
       this.station.translate(shift);
       this.walking.resetTracking(this.rig.position.y);
       this.walking.lastValid?.add(shift);
@@ -328,9 +359,9 @@ export class XRWalk {
     this.placement.reach = reach;
     const landings = storeyLandings(model.collision, model.storeys, model.terrain, reach);
     const entrance = model.points.find((point) => point.type === 'entrance');
-    this.spawn = entrance
+    this.spawn.offer(entrance
       ? { name: entrance.name, position: new THREE.Vector3(...entrance.position), yaw: entrance.yaw }
-      : spawnLanding(landings);
+      : spawnLanding(landings));
     this.station.setNavigation(model.nav, model.points, model.levels);
   }
 
@@ -341,12 +372,17 @@ export class XRWalk {
 
   private placeAtSpawn() {
     this.needsPlacement = false;
-    if (this.spawn) return this.placeHead(this.spawn.position, this.spawn.yaw ?? null);
-    // A model with no usable floor can still be looked at, from beside it.
-    if (!this.model) return;
+    const spot = this.spawn.spot ?? this.besideModel();
+    if (!spot) return;
+    this.spawn.pin(spot);
+    this.placeHead(spot.position, spot.yaw ?? null);
+  }
+
+  /** A model with no usable floor can still be looked at, from beside it. */
+  private besideModel(): Spot | null {
+    if (!this.model) return null;
     const box = new THREE.Box3().setFromObject(this.model.group);
-    const point = new THREE.Vector3((box.min.x + box.max.x) / 2, box.min.y, box.max.z + 3);
-    this.placeHead(point, null);
+    return { name: 'Beside the model', position: new THREE.Vector3((box.min.x + box.max.x) / 2, box.min.y, box.max.z + 3) };
   }
 
   /** An edit may have removed what the user was standing on, or put a wall where they are. */
@@ -392,7 +428,7 @@ export class XRWalk {
       `fade ${this.fade.describe()}`,
       `head ${text(head)}`,
       `floor ${walking.floorY.toFixed(1)} wall ${model ? model.collision.distanceTo(head, 0.5).toFixed(2) : '-'}`,
-      `spawn ${spawn ? text(spawn.position) : 'none'}`,
+      `spawn ${spawn.phase} ${spawn.spot ? text(spawn.spot.position) : 'none'}`,
     ];
   }
 
@@ -412,6 +448,7 @@ export class XRWalk {
     this.trigger.update();
     this.teleport.update();
     this.placement.update();
+    this.updateReturnHold(now);
     this.updateSnapTurn();
     const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => pointerRay(p, new THREE.Ray()));
     this.camera.getWorldPosition(head);

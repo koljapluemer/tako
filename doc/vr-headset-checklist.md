@@ -55,6 +55,7 @@ Needs a local project with at least two revisions on the headset.
 ### Station
 - [ ] Left trigger's straight ray places the station on valid floor and refuses anything else; a new one replaces the old.
 - [ ] Right trigger teleports and the left never does; right stick sets the landing direction and is the only one that snap turns.
+- [ ] Holding X fills the ring and returns once to the exact spot you started at, even if the navmesh finished after you entered; releasing early cancels, and it stays put while still held. Tune `RETURN_HOLD_MS` (`viewer/src/xr/session.ts`) and the ring size (`viewer/src/xr/hold-ring.ts`).
 - [ ] Model height and card distance feel right, and the cards read clearly. Tune `MODEL_HEIGHT`, `STAND_DISTANCE` and `CARD_HEIGHT` (`viewer/src/xr/station.ts`).
 - [ ] A station placed close to a wall is still usable: the model can clip into it.
 - [ ] Walls hide the station and stop presses reaching it.
