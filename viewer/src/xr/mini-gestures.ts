@@ -1,10 +1,10 @@
 export type Vec3 = [number, number, number];
 
 // Provisional, to be tuned on a headset: see doc/vr-headset-checklist.md.
-export const PIN_MIN_SPACING = 0.04;
-export const PIN_CONTACT_RADIUS = 0.018;
+export const PIN_MIN_SPACING = 0.08;
+export const PIN_CONTACT_RADIUS = 0.03;
 export const PIN_ARM_DEPTH = 0.01;
-export const PIN_SLIDE_OFF = 0.03;
+export const PIN_SLIDE_OFF = 0.045;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 6;
 

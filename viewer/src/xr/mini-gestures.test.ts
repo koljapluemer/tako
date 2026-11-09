@@ -75,6 +75,6 @@ describe('visiblePins', () => {
 
   it('hides lower-importance pins until zoomed in, per level', () => {
     expect(visiblePins(pins, 0.02, 1)).toHaveLength(2);
-    expect(visiblePins(pins, 0.02, 3)).toHaveLength(3);
+    expect(visiblePins(pins, 0.02, 5)).toHaveLength(3);
   });
 });

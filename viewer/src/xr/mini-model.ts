@@ -6,8 +6,12 @@ import { fitScale, LONGEST_SIDE } from './mini-view';
 import { CanvasPanel, type LimitedRay } from './panel';
 
 const GRAB_MARGIN = 0.06;
-const STEM = 0.03;
-const PIN_RADIUS = 0.012;
+const PIN_RADIUS = 0.022;
+const PIN_THICKNESS = 0.004;
+/** Keeps the disc from z-fighting with the floor it sits on. */
+const PIN_LIFT = 0.002;
+const PIN_TOP = PIN_LIFT + PIN_THICKNESS;
+const LABEL_HEIGHT = 0.08;
 const RAY_SNAP = Math.sin(THREE.MathUtils.degToRad(5));
 /** After the building's own glass, before UI panels. */
 const RENDER_ORDER = 8400;
@@ -167,13 +171,10 @@ export class MiniModel {
     }
     this.setOpacity(this.opacityValue);
 
-    const stem = new THREE.CylinderGeometry(PIN_RADIUS, PIN_RADIUS, 0.006, 16).translate(0, STEM, 0);
-    const shaft = new THREE.CylinderGeometry(0.0015, 0.0015, STEM, 6).translate(0, STEM / 2, 0);
-    const shape = new THREE.BufferGeometry().copy(stem);
-    const merged = mergeTwo(shape, shaft);
+    const disc = new THREE.CylinderGeometry(PIN_RADIUS, PIN_RADIUS, PIN_THICKNESS, 32).translate(0, PIN_LIFT + PIN_THICKNESS / 2, 0);
     this.pins = points.map((p) => {
       const pinMaterial = material(p.type === 'entrance' ? COLOR.entrance : p.type === 'stair' ? COLOR.stair : COLOR.pin, 1);
-      const mesh = new THREE.Mesh(merged, pinMaterial);
+      const mesh = new THREE.Mesh(disc, pinMaterial);
       mesh.renderOrder = RENDER_ORDER + 1;
       this.mapPoint(p.position[0], p.position[1], p.position[2], mesh.position);
       this.content.add(mesh);
@@ -313,7 +314,7 @@ export class MiniModel {
       for (const tip of tips) {
         let press = pin.press.get(tip.id);
         if (!press) pin.press.set(tip.id, (press = new PinPress()));
-        const height = tip.position.y - (point.y + STEM);
+        const height = tip.position.y - (point.y + PIN_TOP);
         const lateral = Math.hypot(tip.position.x - point.x, tip.position.z - point.z);
         const event = press.update(height, lateral);
         if (event === 'commit') {
@@ -366,21 +367,11 @@ export class MiniModel {
 
   private placeLabel(pin: Pin) {
     pin.mesh.getWorldPosition(this.label.mesh.position);
-    this.label.mesh.position.y += STEM + 0.05;
+    this.label.mesh.position.y += LABEL_HEIGHT;
     this.label.mesh.rotation.y = this.root.rotation.y;
   }
 }
 
 function colorOf(point: NavPoint) {
   return point.type === 'entrance' ? COLOR.entrance : point.type === 'stair' ? COLOR.stair : COLOR.pin;
-}
-
-function mergeTwo(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
-  const [ga, gb] = [a.toNonIndexed(), b.toNonIndexed()];
-  const positions = new Float32Array(ga.attributes.position.count * 3 + gb.attributes.position.count * 3);
-  positions.set(ga.attributes.position.array);
-  positions.set(gb.attributes.position.array, ga.attributes.position.count * 3);
-  const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  return out;
 }

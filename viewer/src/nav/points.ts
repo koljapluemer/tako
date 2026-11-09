@@ -41,9 +41,9 @@ const SADDLE_RATIO = 0.75;
 const JUNCTION_MAX_HALF_WIDTH = 1.5;
 const JUNCTION_CLUSTER = 1.5;
 const DOOR_PROBE = 1.2;
-const M2_PER_POINT = 40;
+const M2_PER_POINT = 160;
 const MIN_POINTS = 3;
-export const MAX_POINTS = 24;
+export const MAX_POINTS = 6;
 /** Smaller watershed basins are fragments such as stair treads, not somewhere anyone would go. */
 const MIN_ROOM_M2 = 4;
 /** Paired doors, or two flights landing together, are one place to a visitor. */

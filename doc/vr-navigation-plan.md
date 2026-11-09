@@ -90,12 +90,12 @@ See `vr-controls.svg` for the full mapping.
 
 - Grab is `squeeze` on controllers and a pinch near the model with hands.
   Teleporting is on the stick, so a grab cannot start one.
-- Pins are small buttons on stems above their floor. Contact highlights and
+- Pins are flat discs on their floor. Contact highlights and
   shows the name, pressing about 1 cm arms, lifting off commits, sliding off
   sideways cancels.
 - Committing does the normal fade-teleport and closes the model. Position, spin
   and zoom reset on next open.
-- Pin spacing is at least about 4 cm at default scale, to be tuned on a headset.
+- Pin spacing is at least about 8 cm at default scale, to be tuned on a headset.
   Lower-importance pins appear as the user zooms in.
 
 ## Build order
