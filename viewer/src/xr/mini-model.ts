@@ -1,19 +1,18 @@
 import * as THREE from 'three';
-import type { NavMesh } from '../collision';
-import type { NavLevel, NavPoint } from '../nav/points';
+import type { LoadedModel } from '../model';
+import type { NavPoint } from '../nav/points';
 import { PinPress, turntableDelta, twoHandPlacement, visiblePins, type Placement, type Vec3 } from './mini-gestures';
-import { fitScale, levelOffsets, stackDrop, stackHeight, LONGEST_SIDE, WALL_HEIGHT_M } from './mini-view';
+import { fitScale, LONGEST_SIDE } from './mini-view';
 import { CanvasPanel, type LimitedRay } from './panel';
 
 const GRAB_MARGIN = 0.06;
-const WELD = 0.05;
 const STEM = 0.03;
 const PIN_RADIUS = 0.012;
 const RAY_SNAP = Math.sin(THREE.MathUtils.degToRad(5));
 /** After the building's own glass, before UI panels. */
 const RENDER_ORDER = 8400;
 
-const COLOR = { floor: 0xc9d4de, wall: 0x7d8a96, currentFloor: 0x9fd8f5, currentWall: 0x4f92b3, pin: 0x35d0ff, entrance: 0x7dff9b, stair: 0xffc14d, hover: 0xffffff, you: 0xff5a5a };
+const COLOR = { pin: 0x35d0ff, entrance: 0x7dff9b, stair: 0xffc14d, hover: 0xffffff, you: 0xff5a5a };
 
 type Hand = { id: number; position: THREE.Vector3 };
 type Pin = { point: NavPoint; mesh: THREE.Mesh; x: number; z: number; level: number; importance: number; press: Map<number, PinPress> };
@@ -26,45 +25,6 @@ export type MiniInput = {
 
 const toVec = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
 const point = new THREE.Vector3();
-const local = new THREE.Vector3();
-
-function levelIndex(y: number, levels: NavLevel[]) {
-  let best = 0;
-  levels.forEach((level, i) => {
-    if (Math.abs(level.y - y) < Math.abs(levels[best].y - y)) best = i;
-  });
-  return best;
-}
-
-/** Floor triangles, plus walls extruded from edges that only one triangle uses. */
-function levelGeometry(positions: Float32Array, levels: NavLevel[]): Array<{ floors: number[]; walls: number[] }> {
-  const out = levels.map(() => ({ floors: [] as number[], walls: [] as number[] }));
-  const edges = levels.map(() => new Map<string, { count: number; a: Vec3; b: Vec3 }>());
-  const weld = (p: Vec3) => `${Math.round(p[0] / WELD)},${Math.round(p[2] / WELD)}`;
-  for (let t = 0; t < positions.length; t += 9) {
-    const corners: Vec3[] = [0, 3, 6].map((o) => [positions[t + o], positions[t + o + 1], positions[t + o + 2]]);
-    const level = levelIndex((corners[0][1] + corners[1][1] + corners[2][1]) / 3, levels);
-    out[level].floors.push(...corners.flat());
-    corners.forEach((a, i) => {
-      const b = corners[(i + 1) % 3];
-      const [ka, kb] = [weld(a), weld(b)];
-      const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-      const edge = edges[level].get(key);
-      if (edge) edge.count++;
-      else edges[level].set(key, { count: 1, a, b });
-    });
-  }
-  edges.forEach((map, level) => {
-    for (const { count, a, b } of map.values()) {
-      if (count !== 1) continue;
-      const [ax, ay, az] = a;
-      const [bx, by, bz] = b;
-      const top = WALL_HEIGHT_M;
-      out[level].walls.push(ax, ay, az, bx, by, bz, bx, by + top, bz, ax, ay, az, bx, by + top, bz, ax, ay + top, az);
-    }
-  });
-  return out;
-}
 
 function material(color: number, opacity: number) {
   // `transparent` puts these after the building's own glass, whatever their opacity.
@@ -72,40 +32,32 @@ function material(color: number, opacity: number) {
 }
 
 /**
- * The world in miniature. Built from the navmesh rather than the building, so it
- * stays cheap on any model. It stands in the building like any object: walls hide it.
+ * The world in miniature: the building's own meshes at a small scale, sharing their
+ * geometry so it costs draw calls but no memory. It stands in the building like any
+ * object: walls hide it.
  */
 export class MiniModel {
   private root = new THREE.Group();
   private content = new THREE.Group();
   private marker: THREE.Mesh;
   private label = new CanvasPanel(0.2, 0.05);
-  private levelMeshes: Array<{ group: THREE.Group; floor: THREE.Mesh; walls: THREE.Mesh }> = [];
-  private offsets: number[] = [];
-  private spreadValue = 0.5;
+  private building = new THREE.Group();
+  private shells: Array<{ material: THREE.Material; opacity: number }> = [];
   private opacityValue = 1;
   private pinsOn = true;
   private pins: Pin[] = [];
   private shown: Pin[] = [];
-  private levels: NavLevel[] = [];
-  private points: NavPoint[] = [];
-  private nav: NavMesh | null = null;
+  private source: LoadedModel | null = null;
   private origin = new THREE.Vector3();
   private scale = 1;
   private radius = LONGEST_SIDE / 2;
   private zoom = 1;
   private shownZoom = 0;
   private built = false;
-  private currentLevel = -1;
   private grabs = new Map<number, THREE.Vector3>();
   private twoHand: { start: Placement; a: Vec3; b: Vec3; ids: [number, number] } | null = null;
   private lastGrab: THREE.Vector3 | null = null;
   private opened = false;
-
-  private floor = material(COLOR.floor, 1);
-  private wall = material(COLOR.wall, 1);
-  private currentFloor = material(COLOR.currentFloor, 1);
-  private currentWall = material(COLOR.currentWall, 1);
 
   onCommit: (point: NavPoint) => void = () => {};
 
@@ -114,21 +66,13 @@ export class MiniModel {
     this.marker.renderOrder = RENDER_ORDER + 2;
 
     this.label.mesh.renderOrder = RENDER_ORDER + 3;
-    this.root.add(this.content, this.marker);
+    this.root.add(this.building, this.content, this.marker);
     this.root.visible = false;
     scene.add(this.root, this.label.mesh);
   }
 
   private get available() {
-    return this.nav != null && this.levels.length > 0;
-  }
-
-  get canSpread() {
-    return this.levels.length >= 2;
-  }
-
-  get spread() {
-    return this.spreadValue;
+    return this.source?.nav != null;
   }
 
   get opacity() {
@@ -139,25 +83,12 @@ export class MiniModel {
     return this.pinsOn;
   }
 
-  setSpread(spread: number) {
-    this.spreadValue = spread;
-    if (this.built) this.applySpread();
-  }
-
-  private applySpread() {
-    this.offsets = levelOffsets(this.levels.map((level) => level.y), this.scale, this.spreadValue);
-    this.levelMeshes.forEach(({ group }, i) => {
-      group.position.y = this.offsets[i];
-    });
-    this.content.position.y = -stackDrop(stackHeight(this.offsets, this.scale));
-  }
-
-  /** Covers floors and walls. Pins and the marker are controls, with their own toggle. */
+  /** Covers the building. Pins and the marker are controls, with their own toggle. */
   setOpacity(opacity: number) {
     this.opacityValue = opacity;
-    for (const shell of [this.floor, this.wall, this.currentFloor, this.currentWall]) {
-      shell.opacity = opacity;
-      shell.depthWrite = opacity >= 1;
+    for (const shell of this.shells) {
+      shell.material.opacity = shell.opacity * opacity;
+      shell.material.depthWrite = shell.material.opacity >= 1;
     }
   }
 
@@ -169,10 +100,8 @@ export class MiniModel {
   }
 
   /** Stays open across a revision swap: empty until the new navmesh arrives. */
-  setData(nav: NavMesh | null, points: NavPoint[], levels: NavLevel[]) {
-    this.nav = nav;
-    this.points = points;
-    this.levels = levels;
+  setData(source: LoadedModel | null) {
+    this.source = source;
     this.built = false;
     if (!this.opened) return;
     this.clear();
@@ -191,67 +120,72 @@ export class MiniModel {
     this.highlight(null);
     this.content.traverse((child) => (child as THREE.Mesh).geometry?.dispose());
     this.content.clear();
+    // The geometry belongs to the building.
+    this.building.clear();
+    this.shells.forEach(({ material }) => material.dispose());
+    this.shells = [];
     this.pins.forEach(({ mesh }) => (mesh.material as THREE.Material).dispose());
-    this.levelMeshes = [];
     this.pins = [];
     this.shown = [];
   }
 
   private build() {
     this.clear();
-    const positions = this.nav!.positions;
-    const box = new THREE.Box3();
-    for (let i = 0; i < positions.length; i += 3) box.expandByPoint(point.set(positions[i], positions[i + 1], positions[i + 2]));
-    const size = box.getSize(new THREE.Vector3());
-    this.scale = fitScale(size.x, size.z, this.levels[this.levels.length - 1].y - this.levels[0].y);
-    box.getCenter(this.origin);
-    this.radius = Math.hypot(size.x, size.z) * this.scale / 2;
+    const { group, points, doorCells } = this.source!;
+    // Merged meshes already draw these; the individual ones are for fading up close.
+    const doors = new Set<THREE.Object3D>(doorCells.flatMap((cell) => cell.doors.map((door) => door.mesh)));
+    const meshes = group.children.filter((child) => !doors.has(child)) as THREE.Mesh[];
 
-    levelGeometry(positions, this.levels).forEach(({ floors, walls }, level) => {
-      const group = new THREE.Group();
-      this.content.add(group);
-      const make = (values: number[], shell: THREE.Material) => {
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(this.transform(values, level), 3));
-        const mesh = new THREE.Mesh(geometry, shell);
-        mesh.renderOrder = RENDER_ORDER;
-        group.add(mesh);
-        return mesh;
-      };
-      this.levelMeshes.push({ group, floor: make(floors, this.floor), walls: make(walls, this.wall) });
-    });
+    const box = new THREE.Box3();
+    for (const { geometry } of meshes) {
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      box.union(geometry.boundingBox!);
+    }
+    const size = box.getSize(new THREE.Vector3());
+    this.scale = fitScale(size.x, size.z, size.y);
+    box.getCenter(this.origin).setY(box.min.y);
+    this.radius = Math.hypot(size.x, size.z) * this.scale / 2;
+    this.building.scale.setScalar(this.scale);
+    this.building.position.copy(this.origin).multiplyScalar(-this.scale);
+
+    const clones = new Map<THREE.Material, THREE.Material>();
+    for (const source of meshes) {
+      // A change highlight may be showing on the mesh right now.
+      const original = (source.userData.baseMaterial ?? source.material) as THREE.Material;
+      let clone = clones.get(original);
+      if (!clone) {
+        clone = original.clone();
+        // `transparent` puts these after the building's own glass, whatever their opacity.
+        clone.transparent = true;
+        clones.set(original, clone);
+        this.shells.push({ material: clone, opacity: original.opacity });
+      }
+      const mesh = new THREE.Mesh(source.geometry, clone);
+      // Glass draws over everything solid in the model.
+      mesh.renderOrder = original.opacity < 1 ? RENDER_ORDER : RENDER_ORDER - 1;
+      this.building.add(mesh);
+    }
+    this.setOpacity(this.opacityValue);
 
     const stem = new THREE.CylinderGeometry(PIN_RADIUS, PIN_RADIUS, 0.006, 16).translate(0, STEM, 0);
     const shaft = new THREE.CylinderGeometry(0.0015, 0.0015, STEM, 6).translate(0, STEM / 2, 0);
     const shape = new THREE.BufferGeometry().copy(stem);
     const merged = mergeTwo(shape, shaft);
-    this.pins = this.points.map((p) => {
+    this.pins = points.map((p) => {
       const pinMaterial = material(p.type === 'entrance' ? COLOR.entrance : p.type === 'stair' ? COLOR.stair : COLOR.pin, 1);
       const mesh = new THREE.Mesh(merged, pinMaterial);
       mesh.renderOrder = RENDER_ORDER + 1;
-      this.mapPoint(p.position[0], p.position[1], p.position[2], p.level, mesh.position);
-      (this.levelMeshes[p.level]?.group ?? this.content).add(mesh);
+      this.mapPoint(p.position[0], p.position[1], p.position[2], mesh.position);
+      this.content.add(mesh);
       return { point: p, mesh, x: p.position[0], z: p.position[2], level: p.level, importance: p.importance, press: new Map() };
     });
     this.shownZoom = 0;
-    this.currentLevel = -1;
     this.built = true;
-    this.applySpread();
   }
 
-  /** Building metres to the model's own space, relative to the level's group. */
-  private mapPoint(x: number, y: number, z: number, level: number, out: THREE.Vector3) {
-    const levelY = this.levels[level]?.y ?? 0;
-    return out.set((x - this.origin.x) * this.scale, (y - levelY) * this.scale, (z - this.origin.z) * this.scale);
-  }
-
-  private transform(values: number[], level: number) {
-    const out = new Float32Array(values.length);
-    for (let i = 0; i < values.length; i += 3) {
-      this.mapPoint(values[i], values[i + 1], values[i + 2], level, local);
-      out.set([local.x, local.y, local.z], i);
-    }
-    return out;
+  /** Building metres to the model's own space. */
+  private mapPoint(x: number, y: number, z: number, out: THREE.Vector3) {
+    return out.set(x, y, z).sub(this.origin).multiplyScalar(this.scale);
   }
 
   /** Aligned with the building, so directions in the model match the real ones. */
@@ -324,7 +258,6 @@ export class MiniModel {
     if (!this.opened || !this.built) return;
     this.applyGrabs(grabs);
     this.root.updateMatrixWorld(true);
-    this.updateLevel(user);
     this.refreshPins();
     this.updateMarker(user);
     if (!this.updatePins(tips)) this.updateHover(picks);
@@ -353,16 +286,6 @@ export class MiniModel {
     }
   }
 
-  private updateLevel(user: MiniInput['user']) {
-    const level = levelIndex(user.y, this.levels);
-    if (level === this.currentLevel) return;
-    this.currentLevel = level;
-    this.levelMeshes.forEach(({ floor, walls }, i) => {
-      floor.material = i === level ? this.currentFloor : this.floor;
-      walls.material = i === level ? this.currentWall : this.wall;
-    });
-  }
-
   private refreshPins() {
     if (this.zoom === this.shownZoom) return;
     this.shownZoom = this.zoom;
@@ -376,8 +299,8 @@ export class MiniModel {
   }
 
   private updateMarker({ x, y, z, yaw }: MiniInput['user']) {
-    this.mapPoint(x, y, z, this.currentLevel, this.marker.position);
-    this.marker.position.y += 0.02 + (this.offsets[this.currentLevel] ?? 0) + this.content.position.y;
+    this.mapPoint(x, y, z, this.marker.position);
+    this.marker.position.y += 0.02;
     this.marker.rotation.y = yaw;
     this.marker.scale.setScalar(1 / this.zoom);
   }

@@ -77,10 +77,8 @@ See `vr-controls.svg` for the full mapping.
 
 - About 50-60 cm on its longest side, gravity-aligned and world-locked, with a
   "you are here" marker showing facing.
-- Built from the navmesh (floor plates and extruded wall outlines) as one cheap
-  merged mesh. It does not reuse the full building geometry.
-- Storeys are pulled apart vertically. The current storey is solid, others are
-  ghosted.
+- The building's own meshes and colours at a uniform small scale, sharing their
+  geometry. An Opacity slider lets the user see inside.
 - Only pins are selectable, never model geometry.
 
 | Input | Action |

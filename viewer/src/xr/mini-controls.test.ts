@@ -3,11 +3,10 @@ import { LABEL_END, PANEL_H, PANEL_W, rowAt, rowBox, TRACK_END, TRACK_START, tra
 
 describe('panel layout', () => {
   it('stacks the rows inside the panel without overlap', () => {
-    const rows = [0, 1, 2].map(rowBox);
+    const rows = [0, 1].map(rowBox);
     expect(rows[0].top).toBeGreaterThan(0);
-    expect(rows[2].bottom).toBeLessThan(PANEL_H);
+    expect(rows[1].bottom).toBeLessThan(PANEL_H);
     expect(rows[0].bottom).toBeCloseTo(rows[1].top, 9);
-    expect(rows[1].bottom).toBeCloseTo(rows[2].top, 9);
   });
 
   it('keeps labels and controls in separate columns inside the panel', () => {

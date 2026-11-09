@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import type { Collision, NavMesh } from '../collision';
-import type { NavLevel, NavPoint } from '../nav/points';
+import type { Collision } from '../collision';
+import type { LoadedModel } from '../model';
+import type { NavPoint } from '../nav/points';
 import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
 import { Arc, ARC_ANGLE_STEP, ARC_RADIUS } from './arc';
@@ -126,8 +127,8 @@ export class Station {
     this.collision = collision;
   }
 
-  setNavigation(nav: NavMesh | null, points: NavPoint[], levels: NavLevel[]) {
-    this.mini.setData(nav, points, levels);
+  setNavigation(model: LoadedModel | null) {
+    this.mini.setData(model);
   }
 
   /** Replaces any existing station. It turns to face the head once, and stays put. */

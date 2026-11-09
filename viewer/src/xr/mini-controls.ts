@@ -3,9 +3,9 @@ import type { MiniModel } from './mini-model';
 import { CanvasPanel, type LimitedRay } from './panel';
 
 export const PANEL_W = 0.44;
-export const PANEL_H = 0.24;
+export const PANEL_H = 0.174;
 const PAD = 0.02;
-const ROW_COUNT = 3;
+const ROW_COUNT = 2;
 const ROW_H = (PANEL_H - 2 * PAD) / ROW_COUNT;
 export const LABEL_END = 0.15;
 const CONTROL_START = 0.17;
@@ -18,11 +18,11 @@ const SWITCH_W = 0.07;
 const SWITCH_H = 0.036;
 const PIXELS_PER_METRE = 2000;
 
-const COLOR = { active: 0x35d0ff, hover: 0xffffff, off: 0x9aa4ae, disabled: 0x555b63 };
+const COLOR = { active: 0x35d0ff, hover: 0xffffff, off: 0x9aa4ae };
 
-export type Row = 'spread' | 'opacity' | 'pins';
-const ROWS: Row[] = ['spread', 'opacity', 'pins'];
-const LABELS: Record<Row, string> = { spread: 'Floors', opacity: 'Opacity', pins: 'Nav points' };
+export type Row = 'opacity' | 'pins';
+const ROWS: Row[] = ['opacity', 'pins'];
+const LABELS: Record<Row, string> = { opacity: 'Opacity', pins: 'Nav points' };
 
 /** Row `index` in metres down from the panel's top. */
 export function rowBox(index: number) {
@@ -55,13 +55,12 @@ function part(geometry: THREE.BufferGeometry, order: number) {
 
 const colorOf = (mesh: THREE.Mesh) => (mesh.material as THREE.MeshBasicMaterial).color;
 
-/** Floor spread, opacity and navigation points. Stays put beside the model; it doesn't turn with it. */
+/** Opacity and navigation points. Stays put beside the model; it doesn't turn with it. */
 export class MiniControls {
   private panel = new CanvasPanel(PANEL_W, PANEL_H, { pixelsPerMetre: PIXELS_PER_METRE, depthTest: true });
   private fills = new Map<Row, THREE.Mesh>();
   private knobs = new Map<Row, THREE.Mesh>();
   private captured = new Map<number, Row>();
-  private spreadEnabled = false;
   private plane = new THREE.Plane();
   private hitPoint = new THREE.Vector3();
   private normal = new THREE.Vector3();
@@ -90,10 +89,6 @@ export class MiniControls {
     mesh.position.set(x - PANEL_W / 2, PANEL_H / 2 - y, z);
   }
 
-  private value(row: Row) {
-    return row === 'spread' ? this.mini.spread : this.mini.opacity;
-  }
-
   private sync() {
     ROWS.forEach((row, index) => {
       const { centre } = rowBox(index);
@@ -103,7 +98,7 @@ export class MiniControls {
         this.place(knob, x, centre, 0.001);
         return;
       }
-      const x = trackX(this.value(row));
+      const x = trackX(this.mini.opacity);
       this.place(knob, x, centre, 0.001);
       const fill = this.fills.get(row)!;
       this.place(fill, TRACK_START, centre, 0.001);
@@ -123,10 +118,9 @@ export class MiniControls {
     ctx.textBaseline = 'middle';
     ROWS.forEach((row, index) => {
       const { centre } = rowBox(index);
-      const dim = row === 'spread' && !this.spreadEnabled;
-      ctx.fillStyle = dim ? '#667' : '#fff';
+      ctx.fillStyle = '#fff';
       ctx.fillText(LABELS[row], px(PAD), px(centre), px(LABEL_END - PAD));
-      ctx.fillStyle = dim ? '#333840' : '#454c55';
+      ctx.fillStyle = '#454c55';
       ctx.beginPath();
       if (row === 'pins') ctx.roundRect(px(CONTROL_END - SWITCH_W), px(centre - SWITCH_H / 2), px(SWITCH_W), px(SWITCH_H), px(SWITCH_H / 2));
       else ctx.roundRect(px(TRACK_START), px(centre - TRACK_H / 2), px(TRACK_END - TRACK_START), px(TRACK_H), px(TRACK_H / 2));
@@ -158,13 +152,11 @@ export class MiniControls {
     if (!hit) return null;
     const x = hit.x / PIXELS_PER_METRE;
     const index = rowAt(x, hit.y / PIXELS_PER_METRE);
-    const row = index < 0 ? null : ROWS[index];
-    return { row: row === 'spread' && !this.spreadEnabled ? null : row, x };
+    return { row: index < 0 ? null : ROWS[index], x };
   }
 
-  private set(row: Row, value: number) {
-    if (row === 'spread') this.mini.setSpread(value);
-    else this.mini.setOpacity(value);
+  private setOpacity(value: number) {
+    this.mini.setOpacity(value);
     this.sync();
   }
 
@@ -180,7 +172,7 @@ export class MiniControls {
       return true;
     }
     this.captured.set(id, row);
-    this.set(row, trackValue(x));
+    this.setOpacity(trackValue(x));
     return true;
   }
 
@@ -189,24 +181,19 @@ export class MiniControls {
   }
 
   /** The plane, not the mesh, so a drag survives the ray sliding off the panel. */
-  private drag(row: Row, ray: THREE.Ray) {
+  private drag(ray: THREE.Ray) {
     const { mesh } = this.panel;
     this.normal.set(0, 0, 1).transformDirection(mesh.matrixWorld);
     this.plane.setFromNormalAndCoplanarPoint(this.normal, mesh.getWorldPosition(this.hitPoint));
     if (!ray.intersectPlane(this.plane, this.hitPoint)) return;
     mesh.worldToLocal(this.hitPoint);
-    this.set(row, trackValue(this.hitPoint.x + PANEL_W / 2));
+    this.setOpacity(trackValue(this.hitPoint.x + PANEL_W / 2));
   }
 
   update(rays: Array<{ id: number; ray: THREE.Ray }>, picks: LimitedRay[]) {
     if (!this.panel.mesh.visible) return;
-    if (this.spreadEnabled !== this.mini.canSpread) {
-      this.spreadEnabled = this.mini.canSpread;
-      this.draw();
-    }
     for (const { id, ray } of rays) {
-      const row = this.captured.get(id);
-      if (row) this.drag(row, ray);
+      if (this.captured.has(id)) this.drag(ray);
     }
     const hovered = new Set<Row>(this.captured.values());
     for (const pick of picks) {
@@ -214,11 +201,10 @@ export class MiniControls {
       if (row) hovered.add(row);
     }
     for (const row of ROWS) {
-      const disabled = row === 'spread' && !this.spreadEnabled;
-      const base = disabled ? COLOR.disabled : row === 'pins' && !this.mini.pinsVisible ? COLOR.off : COLOR.active;
+      const base = row === 'pins' && !this.mini.pinsVisible ? COLOR.off : COLOR.active;
       colorOf(this.knobs.get(row)!).setHex(hovered.has(row) ? COLOR.hover : base);
       const fill = this.fills.get(row);
-      if (fill) colorOf(fill).setHex(disabled ? COLOR.disabled : COLOR.active);
+      if (fill) colorOf(fill).setHex(COLOR.active);
     }
   }
 }

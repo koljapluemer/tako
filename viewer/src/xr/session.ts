@@ -351,7 +351,7 @@ export class XRWalk {
     if (switched) this.spawn.release();
     this.spawn.offer(spawnLanding(landings));
     this.notice.close();
-    this.station.setNavigation(null, [], []);
+    this.station.setNavigation(null);
     if (model.nav) this.setNavigation(model); // a cached revision already has one
 
     if (!this.presenting) return;
@@ -389,7 +389,7 @@ export class XRWalk {
     this.spawn.offer(entrance
       ? { name: entrance.name, position: new THREE.Vector3(...entrance.position), yaw: entrance.yaw }
       : spawnLanding(landings));
-    this.station.setNavigation(model.nav, model.points, model.levels);
+    this.station.setNavigation(model);
   }
 
   private feet() {
