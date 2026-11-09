@@ -60,8 +60,9 @@ export class VoiceAgent {
     recorder.ondataavailable = (event) => chunks.push(event.data);
     recorder.onstop = async () => {
       stream.getTracks().forEach((track) => track.stop());
-      if (performance.now() - this.startedAt < MIN_RECORDING_MS) return this.show('Hold the button while you speak', false);
-      void this.transcribeAndSend(new Blob(chunks, { type: recorder.mimeType }));
+      const recordMs = Math.round(performance.now() - this.startedAt);
+      if (recordMs < MIN_RECORDING_MS) return this.show('Hold the button while you speak', false);
+      void this.transcribeAndSend(new Blob(chunks, { type: recorder.mimeType }), recordMs);
     };
     this.recorder = recorder;
     this.startedAt = performance.now();
@@ -69,13 +70,14 @@ export class VoiceAgent {
     this.show('Listening… release to send', true);
   }
 
-  private async transcribeAndSend(audio: Blob) {
+  private async transcribeAndSend(audio: Blob, recordMs: number) {
     this.show('Transcribing…', true);
+    const started = performance.now();
     try {
       const response = await fetch('/api/transcribe', { method: 'POST', body: audio, headers: { 'content-type': audio.type } });
       if (!response.ok) return this.show(response.status === 429 ? 'Voice limit reached, try later' : 'Speech service failed', false);
       const { text } = await response.json() as { text: string };
-      if (text.trim()) this.sendText(text.trim());
+      if (text.trim()) this.sendText(text.trim(), { record_ms: recordMs, transcribe_ms: Math.round(performance.now() - started) });
       else this.show('I did not catch that', false);
     } catch {
       this.show('Speech service unreachable', false);
@@ -89,7 +91,7 @@ export class VoiceAgent {
   }
 
   /** Same path as speech, minus the microphone. */
-  sendText(text: string) {
-    this.socket?.send(JSON.stringify({ text }));
+  sendText(text: string, speech?: { record_ms: number; transcribe_ms: number }) {
+    this.socket?.send(JSON.stringify({ text, speech }));
   }
 }

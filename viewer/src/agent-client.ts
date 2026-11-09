@@ -2,7 +2,8 @@ import type { OpenedDocument } from './model';
 import type { AgentQuery, CommandResult, DocumentCommand, DocumentSummary, TextReplacement } from './worker-protocol';
 
 type ToolRequest = { type: 'tool'; id: string; name: string; args: Record<string, unknown> };
-type ToolReply = { type: 'result'; id: string; result?: unknown; error?: string };
+type ToolTrace = { browser_ms: number; publish_ms?: number; revision_before?: number; revision_after?: number };
+type ToolReply = { type: 'result'; id: string; result?: unknown; error?: string; trace: ToolTrace };
 type Edit = OpenedDocument & { command: CommandResult };
 
 const queryMethods = new Set(['model_overview', 'find_elements', 'get_element', 'context_around', 'get_focus', 'list_materials', 'kit_help']);
@@ -23,12 +24,14 @@ export function connectAgent(options: {
 
   const reply = (message: ToolReply) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify(message));
 
-  const call = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+  const call = async (name: string, args: Record<string, unknown>, timing: { publish_ms?: number } = {}): Promise<unknown> => {
     if (queryMethods.has(name)) return options.query({ method: name, params: args } as AgentQuery);
     const document = options.document();
     if (!document) throw new Error('no browser project is open');
     const publish = async (changed: Edit) => {
+      const publishing = performance.now();
       await options.changed(changed, changed.command.summary, changed.command.changed);
+      timing.publish_ms = Math.round(performance.now() - publishing);
       return changed.command;
     };
     if (name === 'undo' || name === 'redo') return publish(await options.revision(name, document));
@@ -83,10 +86,17 @@ export function connectAgent(options: {
   };
 
   const handle = async (request: ToolRequest) => {
+    const started = performance.now();
+    const revision_before = options.document()?.revision;
+    const timing: { publish_ms?: number } = {};
+    const trace = (): ToolTrace => ({
+      browser_ms: Math.round(performance.now() - started), ...timing, revision_before, revision_after: options.document()?.revision,
+    });
     try {
-      reply({ type: 'result', id: request.id, result: await call(request.name, request.args) });
+      const result = await call(request.name, request.args, timing);
+      reply({ type: 'result', id: request.id, result, trace: trace() });
     } catch (error) {
-      reply({ type: 'result', id: request.id, error: error instanceof Error ? error.message : String(error) });
+      reply({ type: 'result', id: request.id, error: error instanceof Error ? error.message : String(error), trace: trace() });
     }
   };
 

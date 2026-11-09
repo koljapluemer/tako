@@ -4,12 +4,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import * as z from 'zod/v4';
+import { createTrace } from './trace.js';
 
-type BrowserReply = { type: 'result'; id: string; result?: unknown; error?: string };
-type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
+type ToolOutcome = { result?: unknown; error?: string; trace?: Record<string, unknown> };
+type BrowserReply = ToolOutcome & { type: 'result'; id: string };
+type Pending = { settle: (outcome: ToolOutcome) => void; timer: NodeJS.Timeout };
 
 let browser: WebSocket | null = null;
 const pending = new Map<string, Pending>();
+const trace = createTrace('bridge');
 
 const port = Number(process.env.TAKO_BRIDGE_PORT ?? 47831);
 const webSocketServer = new WebSocketServer({ host: '127.0.0.1', port });
@@ -32,32 +35,42 @@ webSocketServer.on('connection', (socket, request) => {
     if (!call) return;
     clearTimeout(call.timer);
     pending.delete(reply.id);
-    if (reply.error) call.reject(new Error(reply.error));
-    else call.resolve(reply.result);
+    call.settle(reply);
   });
   socket.on('close', () => {
     if (browser === socket) browser = null;
     for (const [id, call] of pending) {
       clearTimeout(call.timer);
-      call.reject(new Error('the tako browser tab disconnected'));
+      call.settle({ error: 'the tako browser tab disconnected' });
       pending.delete(id);
     }
   });
 });
 
-function callBrowser(name: string, args: Record<string, unknown>): Promise<unknown> {
+function callBrowser(name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
   if (!browser || browser.readyState !== browser.OPEN) {
-    throw new Error('No tako browser tab is connected. Open http://localhost:5173 and import or open an IFC project.');
+    return Promise.resolve({ error: 'No tako browser tab is connected. Open http://localhost:5173 and import or open an IFC project.' });
   }
   const id = randomUUID();
-  return new Promise((resolve, reject) => {
+  return new Promise((settle) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`browser tool ${name} timed out`));
+      settle({ error: `browser tool ${name} timed out` });
     }, 300_000);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { settle, timer });
     browser!.send(JSON.stringify({ type: 'tool', id, name, args }));
   });
+}
+
+async function callTraced(name: string, args: Record<string, unknown>): Promise<unknown> {
+  const started = performance.now();
+  const { result, error, trace: browserTrace } = await callBrowser(name, args);
+  trace.write('tool', {
+    tool: name, args, ms: Math.round(performance.now() - started), ok: !error, error,
+    result_bytes: JSON.stringify(result)?.length ?? 0, ...browserTrace,
+  });
+  if (error) throw new Error(error);
+  return result;
 }
 
 const server = new McpServer({ name: 'tako-ifc', version: '0.2.0' }, {
@@ -67,7 +80,7 @@ const server = new McpServer({ name: 'tako-ifc', version: '0.2.0' }, {
 const ok = (result: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });
 const tool = <S extends z.ZodRawShape>(name: string, description: string, schema: S) =>
   server.tool(name, description, schema, (async (args: Record<string, unknown>) =>
-    ok(await callBrowser(name, args))) as never);
+    ok(await callTraced(name, args))) as never);
 
 const title = z.string().max(60).optional().describe('Short name for this revision, shown in the VR revision list. Describe the design change, e.g. "Wider entrance door".');
 
