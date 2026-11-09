@@ -130,11 +130,13 @@ export class XRWalk {
     });
     events.addEventListener('disconnected', () => {
       this.station.grabEnd(index);
+      this.station.pressEnd(index);
       pointer.source = null;
       visual.visible = false;
     });
     events.addEventListener('selectstart', () => this.press(pointer));
     events.addEventListener('selectend', () => {
+      this.station.pressEnd(index);
       if (pointer.source?.hand) this.station.grabEnd(index);
     });
     events.addEventListener('squeezestart', () => this.station.grabStart(index, this.grabPosition(pointer)));
@@ -144,7 +146,7 @@ export class XRWalk {
   private press(pointer: Pointer) {
     const ray = pointerRay(pointer, new THREE.Ray());
     if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return;
-    if (!this.notice.press(ray)) this.station.press(ray);
+    if (!this.notice.press(ray)) this.station.press(ray, pointer.index);
   }
 
   private grabPosition(pointer: Pointer) {
@@ -475,7 +477,7 @@ export class XRWalk {
     this.placement.update();
     this.updateReturnHold(now);
     this.updateSnapTurn();
-    const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => pointerRay(p, new THREE.Ray()));
+    const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
     this.camera.getWorldPosition(head);
     this.camera.getWorldDirection(direction);
     this.station.update({

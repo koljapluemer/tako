@@ -4,6 +4,7 @@ import type { NavLevel, NavPoint } from '../nav/points';
 import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
 import { Arc, ARC_ANGLE_STEP, ARC_RADIUS } from './arc';
+import { MiniControls } from './mini-controls';
 import { MiniModel, type MiniInput } from './mini-model';
 import { CanvasPanel, type LimitedRay } from './panel';
 
@@ -14,6 +15,9 @@ const BUTTON_W = 0.2;
 const BUTTON_H = 0.09;
 /** Just past the last of the arc's five slots, so scrolling never moves them. */
 const BUTTON_SLOT = 3;
+/** Right of the model's widest silhouette, below the row of cards and buttons. */
+const CONTROLS_ANGLE = 0.85;
+const CONTROLS_HEIGHT = 1.19;
 const WALL_RANGE = 40;
 
 export type Placed = { position: THREE.Vector3; rotationY: number };
@@ -22,8 +26,8 @@ export type Placed = { position: THREE.Vector3; rotationY: number };
 export function stationLayout(anchor: THREE.Vector3, yaw: number) {
   const stand = new THREE.Vector3(anchor.x - Math.sin(yaw) * STAND_DISTANCE, anchor.y, anchor.z - Math.cos(yaw) * STAND_DISTANCE);
   const y = anchor.y + CARD_HEIGHT;
-  const onArc = (angle: number): Placed => ({
-    position: new THREE.Vector3(stand.x + Math.sin(angle) * ARC_RADIUS, y, stand.z + Math.cos(angle) * ARC_RADIUS),
+  const onArc = (angle: number, height = y): Placed => ({
+    position: new THREE.Vector3(stand.x + Math.sin(angle) * ARC_RADIUS, height, stand.z + Math.cos(angle) * ARC_RADIUS),
     rotationY: angle + Math.PI,
   });
   return {
@@ -33,6 +37,7 @@ export function stationLayout(anchor: THREE.Vector3, yaw: number) {
     // Slots run towards smaller angles, left to right as seen by the user.
     switcher: onArc(yaw + BUTTON_SLOT * ARC_ANGLE_STEP),
     close: onArc(yaw - BUTTON_SLOT * ARC_ANGLE_STEP),
+    controls: onArc(yaw - CONTROLS_ANGLE, anchor.y + CONTROLS_HEIGHT),
   };
 }
 
@@ -83,6 +88,7 @@ class Button {
 /** The mini model and revision cards, anchored together on a spot of floor. There is at most one. */
 export class Station {
   private mini: MiniModel;
+  private controls: MiniControls;
   private arc: Arc;
   private close_: Button;
   private switcher: Button;
@@ -92,6 +98,7 @@ export class Station {
 
   constructor(scene: THREE.Scene) {
     this.mini = new MiniModel(scene);
+    this.controls = new MiniControls(scene, this.mini);
     this.arc = new Arc(scene);
     this.close_ = new Button(scene, 'Close', () => this.close());
     this.switcher = new Button(scene, 'Buildings', () => this.toggleList());
@@ -131,6 +138,7 @@ export class Station {
     const yaw = dx * dx + dz * dz > 0.01 ? Math.atan2(dx, dz) : 0;
     const layout = stationLayout(anchor, yaw);
     this.mini.open(layout.model);
+    this.controls.open(layout.controls);
     void this.arc.open(layout.arcCentre, yaw);
     this.close_.place(layout.close);
     this.switcher.place(layout.switcher);
@@ -144,6 +152,7 @@ export class Station {
     this.opened = false;
     this.arc.close();
     this.mini.close();
+    this.controls.close();
     this.setVisible(false);
   }
 
@@ -172,6 +181,7 @@ export class Station {
   translate(shift: THREE.Vector3) {
     if (!this.opened) return;
     this.mini.translate(shift);
+    this.controls.translate(shift);
     this.arc.translate(shift);
     for (const { panel } of [this.close_, this.switcher]) {
       panel.mesh.position.add(shift);
@@ -194,7 +204,7 @@ export class Station {
   }
 
   /** Returns true when the press belongs to the station. */
-  press(ray: THREE.Ray): boolean {
+  press(ray: THREE.Ray, id: number): boolean {
     if (!this.opened) return false;
     const pick = this.limited(ray);
     for (const button of [this.close_, this.switcher]) {
@@ -203,12 +213,17 @@ export class Station {
         return true;
       }
     }
-    return this.arc.press(pick) || this.mini.press(pick);
+    return this.controls.press(id, pick) || this.arc.press(pick) || this.mini.press(pick);
   }
 
-  update({ rays, ...input }: Omit<MiniInput, 'picks'> & { rays: THREE.Ray[] }) {
+  pressEnd(id: number) {
+    this.controls.release(id);
+  }
+
+  update({ rays, ...input }: Omit<MiniInput, 'picks'> & { rays: Array<{ id: number; ray: THREE.Ray }> }) {
     if (!this.opened) return;
-    const picks = rays.map((ray) => this.limited(ray));
+    const picks = rays.map(({ ray }) => this.limited(ray));
+    this.controls.update(rays, picks);
     for (const button of [this.close_, this.switcher]) {
       button.setHovered(picks.some(({ ray, far }) => button.panel.hit(ray, far)));
     }

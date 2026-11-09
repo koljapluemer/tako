@@ -51,6 +51,10 @@ Needs a local project with at least two revisions on the headset.
 - [ ] Intended pins can be hit reliably with both hands and controllers. Tune `PIN_MIN_SPACING` and the press depths (`viewer/src/xr/mini-gestures.ts`).
 - [ ] The model reads clearly and isn't cut by nearby walls.
 - [ ] Controller and hand models appear (they download from the WebXR profiles CDN).
+- [ ] The Floors and Opacity sliders track the ray, keep dragging past the panel edge, and reach both ends. Opacity 0 and 1 both look right.
+- [ ] Nav points off hides the pins and they can't be pressed or hovered.
+- [ ] The Floors row is dimmed on a single-level model.
+- [ ] At zoom 1, the panel doesn't touch the model, cards or buttons, across tall and many-level corpus models. Tune `MAX_STACK` and `ROOM_ABOVE` (`viewer/src/xr/mini-view.ts`) and `CONTROLS_ANGLE` and `CONTROLS_HEIGHT` (`viewer/src/xr/station.ts`).
 
 ### Station
 - [ ] Left stick forward aims a straight ray that places the station on valid floor and refuses anything else; a new one replaces the old.

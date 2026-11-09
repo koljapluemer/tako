@@ -2,11 +2,9 @@ import * as THREE from 'three';
 import type { NavMesh } from '../collision';
 import type { NavLevel, NavPoint } from '../nav/points';
 import { PinPress, turntableDelta, twoHandPlacement, visiblePins, type Placement, type Vec3 } from './mini-gestures';
+import { fitScale, levelOffsets, stackDrop, stackHeight, LONGEST_SIDE, WALL_HEIGHT_M } from './mini-view';
 import { CanvasPanel, type LimitedRay } from './panel';
 
-const LONGEST_SIDE = 0.55;
-const LEVEL_GAP = 0.13;
-const WALL_HEIGHT_M = 2.2;
 const GRAB_MARGIN = 0.06;
 const WELD = 0.05;
 const STEM = 0.03;
@@ -15,7 +13,7 @@ const RAY_SNAP = Math.sin(THREE.MathUtils.degToRad(5));
 /** After the building's own glass, before UI panels. */
 const RENDER_ORDER = 8400;
 
-const COLOR = { floor: 0xc9d4de, wall: 0x7d8a96, pin: 0x35d0ff, entrance: 0x7dff9b, stair: 0xffc14d, hover: 0xffffff, you: 0xff5a5a };
+const COLOR = { floor: 0xc9d4de, wall: 0x7d8a96, currentFloor: 0x9fd8f5, currentWall: 0x4f92b3, pin: 0x35d0ff, entrance: 0x7dff9b, stair: 0xffc14d, hover: 0xffffff, you: 0xff5a5a };
 
 type Hand = { id: number; position: THREE.Vector3 };
 type Pin = { point: NavPoint; mesh: THREE.Mesh; x: number; z: number; level: number; importance: number; press: Map<number, PinPress> };
@@ -82,7 +80,11 @@ export class MiniModel {
   private content = new THREE.Group();
   private marker: THREE.Mesh;
   private label = new CanvasPanel(0.2, 0.05);
-  private levelMeshes: Array<{ floor: THREE.Mesh; walls: THREE.Mesh }> = [];
+  private levelMeshes: Array<{ group: THREE.Group; floor: THREE.Mesh; walls: THREE.Mesh }> = [];
+  private offsets: number[] = [];
+  private spreadValue = 0.5;
+  private opacityValue = 1;
+  private pinsOn = true;
   private pins: Pin[] = [];
   private shown: Pin[] = [];
   private levels: NavLevel[] = [];
@@ -100,10 +102,10 @@ export class MiniModel {
   private lastGrab: THREE.Vector3 | null = null;
   private opened = false;
 
-  private solidFloor = material(COLOR.floor, 1);
-  private solidWall = material(COLOR.wall, 1);
-  private ghostFloor = material(COLOR.floor, 0.18);
-  private ghostWall = material(COLOR.wall, 0.12);
+  private floor = material(COLOR.floor, 1);
+  private wall = material(COLOR.wall, 1);
+  private currentFloor = material(COLOR.currentFloor, 1);
+  private currentWall = material(COLOR.currentWall, 1);
 
   onCommit: (point: NavPoint) => void = () => {};
 
@@ -119,6 +121,51 @@ export class MiniModel {
 
   private get available() {
     return this.nav != null && this.levels.length > 0;
+  }
+
+  get canSpread() {
+    return this.levels.length >= 2;
+  }
+
+  get spread() {
+    return this.spreadValue;
+  }
+
+  get opacity() {
+    return this.opacityValue;
+  }
+
+  get pinsVisible() {
+    return this.pinsOn;
+  }
+
+  setSpread(spread: number) {
+    this.spreadValue = spread;
+    if (this.built) this.applySpread();
+  }
+
+  private applySpread() {
+    this.offsets = levelOffsets(this.levels.map((level) => level.y), this.scale, this.spreadValue);
+    this.levelMeshes.forEach(({ group }, i) => {
+      group.position.y = this.offsets[i];
+    });
+    this.content.position.y = -stackDrop(stackHeight(this.offsets, this.scale));
+  }
+
+  /** Covers floors and walls. Pins and the marker are controls, with their own toggle. */
+  setOpacity(opacity: number) {
+    this.opacityValue = opacity;
+    for (const shell of [this.floor, this.wall, this.currentFloor, this.currentWall]) {
+      shell.opacity = opacity;
+      shell.depthWrite = opacity >= 1;
+    }
+  }
+
+  setPinsVisible(on: boolean) {
+    if (on === this.pinsOn) return;
+    this.pinsOn = on;
+    this.shownZoom = 0;
+    this.highlight(null);
   }
 
   /** Stays open across a revision swap: empty until the new navmesh arrives. */
@@ -142,10 +189,8 @@ export class MiniModel {
 
   private clear() {
     this.highlight(null);
-    for (const child of [...this.content.children]) {
-      this.content.remove(child);
-      (child as THREE.Mesh).geometry?.dispose();
-    }
+    this.content.traverse((child) => (child as THREE.Mesh).geometry?.dispose());
+    this.content.clear();
     this.pins.forEach(({ mesh }) => (mesh.material as THREE.Material).dispose());
     this.levelMeshes = [];
     this.pins = [];
@@ -158,20 +203,22 @@ export class MiniModel {
     const box = new THREE.Box3();
     for (let i = 0; i < positions.length; i += 3) box.expandByPoint(point.set(positions[i], positions[i + 1], positions[i + 2]));
     const size = box.getSize(new THREE.Vector3());
-    this.scale = LONGEST_SIDE / Math.max(size.x, size.z, 1);
+    this.scale = fitScale(size.x, size.z, this.levels[this.levels.length - 1].y - this.levels[0].y);
     box.getCenter(this.origin);
     this.radius = Math.hypot(size.x, size.z) * this.scale / 2;
 
     levelGeometry(positions, this.levels).forEach(({ floors, walls }, level) => {
-      const make = (values: number[]) => {
+      const group = new THREE.Group();
+      this.content.add(group);
+      const make = (values: number[], shell: THREE.Material) => {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(this.transform(values, level), 3));
-        const mesh = new THREE.Mesh(geometry, this.ghostFloor);
+        const mesh = new THREE.Mesh(geometry, shell);
         mesh.renderOrder = RENDER_ORDER;
-        this.content.add(mesh);
+        group.add(mesh);
         return mesh;
       };
-      this.levelMeshes.push({ floor: make(floors), walls: make(walls) });
+      this.levelMeshes.push({ group, floor: make(floors, this.floor), walls: make(walls, this.wall) });
     });
 
     const stem = new THREE.CylinderGeometry(PIN_RADIUS, PIN_RADIUS, 0.006, 16).translate(0, STEM, 0);
@@ -183,18 +230,19 @@ export class MiniModel {
       const mesh = new THREE.Mesh(merged, pinMaterial);
       mesh.renderOrder = RENDER_ORDER + 1;
       this.mapPoint(p.position[0], p.position[1], p.position[2], p.level, mesh.position);
-      this.content.add(mesh);
+      (this.levelMeshes[p.level]?.group ?? this.content).add(mesh);
       return { point: p, mesh, x: p.position[0], z: p.position[2], level: p.level, importance: p.importance, press: new Map() };
     });
     this.shownZoom = 0;
     this.currentLevel = -1;
     this.built = true;
+    this.applySpread();
   }
 
-  /** Building metres to the model's own space, with levels pulled apart. */
+  /** Building metres to the model's own space, relative to the level's group. */
   private mapPoint(x: number, y: number, z: number, level: number, out: THREE.Vector3) {
     const levelY = this.levels[level]?.y ?? 0;
-    return out.set((x - this.origin.x) * this.scale, (y - levelY) * this.scale + level * LEVEL_GAP, (z - this.origin.z) * this.scale);
+    return out.set((x - this.origin.x) * this.scale, (y - levelY) * this.scale, (z - this.origin.z) * this.scale);
   }
 
   private transform(values: number[], level: number) {
@@ -310,15 +358,15 @@ export class MiniModel {
     if (level === this.currentLevel) return;
     this.currentLevel = level;
     this.levelMeshes.forEach(({ floor, walls }, i) => {
-      floor.material = i === level ? this.solidFloor : this.ghostFloor;
-      walls.material = i === level ? this.solidWall : this.ghostWall;
+      floor.material = i === level ? this.currentFloor : this.floor;
+      walls.material = i === level ? this.currentWall : this.wall;
     });
   }
 
   private refreshPins() {
     if (this.zoom === this.shownZoom) return;
     this.shownZoom = this.zoom;
-    this.shown = visiblePins(this.pins, this.scale, this.zoom);
+    this.shown = this.pinsOn ? visiblePins(this.pins, this.scale, this.zoom) : [];
     const visible = new Set(this.shown);
     for (const pin of this.pins) {
       pin.mesh.visible = visible.has(pin);
@@ -329,7 +377,7 @@ export class MiniModel {
 
   private updateMarker({ x, y, z, yaw }: MiniInput['user']) {
     this.mapPoint(x, y, z, this.currentLevel, this.marker.position);
-    this.marker.position.y += 0.02;
+    this.marker.position.y += 0.02 + (this.offsets[this.currentLevel] ?? 0) + this.content.position.y;
     this.marker.rotation.y = yaw;
     this.marker.scale.setScalar(1 / this.zoom);
   }

@@ -7,7 +7,7 @@ export const ARC_RADIUS = 1.25;
 export const ARC_ANGLE_STEP = 0.3;
 export const ARC_SLOTS = 5;
 const CARD_W = 0.34;
-const CARD_H = 0.21;
+export const CARD_H = 0.21;
 
 type Item = { title: string; detail: string; current: boolean; dim: boolean; run: () => void };
 
