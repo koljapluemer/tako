@@ -8,8 +8,9 @@ import { cellKey } from './render-cells';
 import {
   IFCBUILDINGSTOREY, IFCSPACE, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
   IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE,
-  IFCREAL, IFCRELDEFINESBYPROPERTIES, IFCRELFILLSELEMENT, IFCSIUNIT, IFCSITE, IfcAPI,
+  IFCREAL, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE, IFCRELFILLSELEMENT, IFCRELVOIDSELEMENT, IFCSIUNIT, IFCSITE, IfcAPI,
 } from 'web-ifc';
+import { openingsFreedBy, type Filling } from './delete-targets';
 import { classify, isDoor, isFurniture, isSlab, isStair } from './ifc-classes';
 import {
   commitProject, exportProject, importProject, listProjects, loadRevision, openProject, saveFocus,
@@ -48,9 +49,64 @@ type SemanticFact = {
 };
 
 let semanticFacts = new Map<number, SemanticFact>();
+/** Why the last open failed; cleared by the next one that succeeds. */
+let modelFailure: string | null = null;
+
+/** Thrown without a stack in its message: the agent reads it and should act on it, not debug it. */
+class ModelUnavailable extends Error {
+  constructor() {
+    super(modelFailure ?? 'no project is open');
+  }
+}
+
+const errorText = (error: unknown) => {
+  if (error instanceof ModelUnavailable) return error.message;
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
+};
+
+/** The only way to open a model: web-ifc signals failure by returning -1, which must never become `openModel`. */
+function openIfc(data: Uint8Array, reason: string): number {
+  const closed = openModel;
+  if (closed != null) api.CloseModel(closed);
+  openModel = null;
+  const started = performance.now();
+  let modelID = -1;
+  let error: string | undefined;
+  try {
+    modelID = api.OpenModel(data, { COORDINATE_TO_ORIGIN: true });
+  } catch (thrown) {
+    error = thrown instanceof Error ? thrown.message : String(thrown);
+  }
+  const ok = modelID >= 0;
+  post({
+    type: 'modelEvent',
+    event: {
+      at: new Date().toISOString(), reason, ok, ms: Math.round(performance.now() - started), bytes: data.byteLength,
+      opened: ok ? modelID : null, closed, heap_bytes: api.wasmModule?.HEAPU8?.length ?? null, error,
+    },
+  });
+  if (!ok) {
+    semanticFacts = new Map();
+    modelFailure = `The IFC model failed to open in the viewer (${reason}, ${data.byteLength} bytes${error ? `: ${error}` : ''}). `
+      + 'Nothing can read or edit it until it opens again. Do not retry; ask the user to reload the page.';
+    throw new ModelUnavailable();
+  }
+  modelFailure = null;
+  openModel = modelID;
+  return modelID;
+}
+
+/** Puts back the model a failed edit started from, without letting a failed restore hide why the edit failed. */
+function restoreModel(data: Uint8Array, failure: string) {
+  try {
+    openIfc(data, 'restore after failed edit');
+  } catch (error) {
+    throw new Error(`${failure}\n${errorText(error)}`);
+  }
+}
 
 const document = (): DocumentSummary => {
-  if (!manifest) throw new Error('no project is open');
+  if (!manifest) throw new ModelUnavailable();
   return { ...manifest, documentId: `${manifest.id}:${manifest.sourceFingerprint}` };
 };
 
@@ -252,12 +308,9 @@ async function navigation(token: number): Promise<{ result: NavBuild; transfer: 
 async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ result: LoadResult; transfer: Transferable[] }> {
   await ready;
   deferred = null;
-  if (openModel != null) api.CloseModel(openModel);
-  openModel = null;
 
   post({ type: 'progress', message: 'Parsing IFC…' });
-  const modelID = api.OpenModel(data, { COORDINATE_TO_ORIGIN: true });
-  openModel = modelID;
+  const modelID = openIfc(data, 'load');
 
   const standalone = new Set(standaloneIds);
   const batches = new Map<string, { color: Rgba; chunks: Chunk[] }>();
@@ -474,12 +527,51 @@ const boxGap = (a: SemanticFact, b: SemanticFact) => Math.hypot(...([0, 1, 2].ma
 
 const reportProgress = (message: string) => post({ type: 'progress', message });
 
+/** The model state a cached spatial index belongs to. Revision numbers are reused after undo, command ids are not. */
+function indexKey(): string {
+  const current = requireDocument();
+  return `${current.id}:${history[current.cursor - 1]?.commandId ?? 'source'}`;
+}
+
+function relationLines(model: number, type: number) {
+  const ids = api.GetLineIDsWithType(model, type);
+  return Array.from({ length: ids.size() }, (_, i) => api.GetLine(model, ids.get(i)));
+}
+
+function readFillings(model: number): Filling[] {
+  return relationLines(model, IFCRELFILLSELEMENT).map((rel) => ({
+    opening: rel.RelatingOpeningElement.value as number, filling: rel.RelatedBuildingElement.value as number,
+  }));
+}
+
+/** How an element connects to its opening, host and type, so "this window" doesn't need a script to resolve. */
+function elementRelations(id: number) {
+  if (openModel == null) return {};
+  const model = openModel;
+  const describe = (entity: number) => ({
+    id: `#${entity}`, class: api.GetNameFromTypeCode(api.GetLineType(model, entity)), name: text(api.GetLine(model, entity).Name),
+  });
+  const opening = readFillings(model).find((rel) => rel.filling === id)?.opening;
+  const voids = relationLines(model, IFCRELVOIDSELEMENT);
+  const host = voids.find((rel) => rel.RelatedOpeningElement.value === opening)?.RelatingBuildingElement.value as number | undefined;
+  const openings = voids.filter((rel) => rel.RelatingBuildingElement.value === id).map((rel) => describe(rel.RelatedOpeningElement.value as number));
+  const type = relationLines(model, IFCRELDEFINESBYTYPE)
+    .find((rel) => (rel.RelatedObjects as Array<{ value: number }>).some((related) => related.value === id))?.RelatingType.value as number | undefined;
+  return {
+    ...(opening != null && { opening: describe(opening) }),
+    ...(host != null && { host: describe(host) }),
+    ...(openings.length > 0 && { openings }),
+    ...(type != null && { type: describe(type) }),
+  };
+}
+
 async function queryAgent(query: AgentQuery): Promise<unknown> {
   if (query.method === 'kit_help') return kitHelp(query.params.topic, reportProgress);
   const current = requireDocument();
+  if (openModel == null) throw new ModelUnavailable();
   if (query.method === 'inspect_with_script') {
-    const { output } = await runScript(api.SaveModel(openModel!), query.params.code, query.params.values, false, reportProgress);
-    return { ok: true, output, committed: false };
+    const { output, timing } = await runScript(api.SaveModel(openModel!), query.params.code, query.params.values, false, indexKey(), reportProgress);
+    return { ok: true, output, committed: false, timing };
   }
   if (query.method === 'model_overview') {
     const counts: Record<string, number> = {};
@@ -510,7 +602,7 @@ async function queryAgent(query: AgentQuery): Promise<unknown> {
   }
   if (query.method === 'get_element') {
     const fact = resolveFact(query.params.element);
-    return { ...factDescription(fact), inspection: await inspect(fact.id) };
+    return { ...factDescription(fact), relations: elementRelations(fact.id), inspection: await inspect(fact.id) };
   }
   if (query.method === 'context_around') {
     const target = resolveFact(query.params.target);
@@ -526,7 +618,9 @@ async function queryAgent(query: AgentQuery): Promise<unknown> {
   }
   if (query.method === 'get_focus') {
     return {
-      selection: current.focus != null && semanticFacts.has(current.focus) ? factDescription(semanticFacts.get(current.focus)!) : null,
+      selection: current.focus != null && semanticFacts.has(current.focus)
+        ? { ...factDescription(semanticFacts.get(current.focus)!), relations: elementRelations(current.focus) }
+        : null,
       latest_edit: history[current.cursor - 1] ?? null,
     };
   }
@@ -546,7 +640,7 @@ function requireDocument(documentId?: string, baseRevision?: number): ProjectMan
 }
 
 function targetId(target: { expressID?: number; globalId?: string }): number {
-  if (openModel == null) throw new Error('no project is open');
+  if (openModel == null) throw new ModelUnavailable();
   if (target.expressID != null) return target.expressID;
   if (!target.globalId) throw new Error('a target needs expressID or globalId');
   const ids = api.GetAllLines(openModel);
@@ -557,26 +651,26 @@ function targetId(target: { expressID?: number; globalId?: string }): number {
   throw new Error(`no element with GlobalId ${target.globalId}`);
 }
 
-const isRef = (value: unknown, id: number): boolean => {
-  if (Array.isArray(value)) return value.some((v) => isRef(v, id));
+const isRef = (value: unknown, ids: ReadonlySet<number>): boolean => {
+  if (Array.isArray(value)) return value.some((v) => isRef(v, ids));
   if (!value || typeof value !== 'object') return false;
   const object = value as Record<string, unknown>;
-  if (object.type === 5 && object.value === id) return true;
-  return Object.values(object).some((v) => isRef(v, id));
+  if (object.type === 5 && ids.has(object.value as number)) return true;
+  return Object.values(object).some((v) => isRef(v, ids));
 };
 
-function removeRef(value: unknown, id: number): unknown {
-  if (Array.isArray(value)) return value.filter((v) => !isRef(v, id)).map((v) => removeRef(v, id));
+function removeRef(value: unknown, ids: ReadonlySet<number>): unknown {
+  if (Array.isArray(value)) return value.filter((v) => !isRef(v, ids)).map((v) => removeRef(v, ids));
   if (!value || typeof value !== 'object') return value;
   const object = value as Record<string, unknown>;
   for (const [key, child] of Object.entries(object)) {
-    if (isRef(child, id)) object[key] = removeRef(child, id);
+    if (isRef(child, ids)) object[key] = removeRef(child, ids);
   }
   return object;
 }
 
 function metresPerModelUnit(): number {
-  if (openModel == null) throw new Error('no project is open');
+  if (openModel == null) throw new ModelUnavailable();
   const prefix: Record<string, number> = { EXA: 1e18, PETA: 1e15, TERA: 1e12, GIGA: 1e9, MEGA: 1e6, KILO: 1e3, HECTO: 1e2, DECA: 10, DECI: 0.1, CENTI: 0.01, MILLI: 0.001, MICRO: 1e-6, NANO: 1e-9 };
   const units = api.GetLineIDsWithType(openModel, IFCSIUNIT);
   for (let i = 0; i < units.size(); i++) {
@@ -586,51 +680,53 @@ function metresPerModelUnit(): number {
   return 1;
 }
 
-type Applied = { changed: number[]; summary: string; bytes?: Uint8Array; warnings?: string[]; output?: string };
+type Applied = { changed: number[]; summary: string; bytes?: Uint8Array; warnings?: string[]; output?: string; timing?: Record<string, number> };
 
 async function applyScript(command: Extract<DocumentCommand, { kind: 'script' }>, model: Uint8Array): Promise<Applied> {
   const { code, summary, values } = command.params;
-  const result = await runScript(model, code, values, true, reportProgress);
-  return { summary, changed: result.changed, bytes: result.bytes, warnings: result.verify.problems, output: result.output };
+  const result = await runScript(model, code, values, true, indexKey(), reportProgress);
+  return { summary, changed: result.changed, bytes: result.bytes, warnings: result.verify.problems, output: result.output, timing: result.timing };
 }
 
 function applyCommand(command: Exclude<DocumentCommand, { kind: 'script' }>): Applied {
-  if (openModel == null) throw new Error('no project is open');
+  if (openModel == null) throw new ModelUnavailable();
   const ids = [...new Set(command.targets.map(targetId))];
   if (!ids.length) throw new Error('the command has no targets');
 
   if (command.kind === 'deleteElements') {
     if (!command.params.confirmationToken) throw new Error('deletion requires a confirmation token');
+    const targets = new Set(ids);
+    const openings = openingsFreedBy(readFillings(openModel), targets).filter((opening) => !targets.has(opening));
+    openings.forEach((opening) => targets.add(opening));
     const all = api.GetAllLines(openModel);
-    for (const id of ids) {
-      for (let i = 0; i < all.size(); i++) {
-        const other = all.get(i);
-        if (other === id) continue;
-        const line = api.GetLine(openModel, other);
-        if (!isRef(line, id)) continue;
-        const name = api.GetNameFromTypeCode(api.GetLineType(openModel, other));
-        if (name.startsWith('IfcRel')) {
-          const entries = Object.entries(line as Record<string, unknown>);
-          const scalarReference = entries.some(([, value]) => !Array.isArray(value) && isRef(value, id));
-          if (scalarReference) {
-            api.DeleteLine(openModel, other);
-          } else {
-            let hasRelatedObjects = false;
-            for (const [key, value] of entries) {
-              if (!Array.isArray(value) || !isRef(value, id)) continue;
-              line[key] = value.filter((candidate) => !isRef(candidate, id));
-              hasRelatedObjects ||= line[key].length > 0;
-            }
-            if (hasRelatedObjects) api.WriteLine(openModel, line);
-            else api.DeleteLine(openModel, other);
-          }
+    for (let i = 0; i < all.size(); i++) {
+      const other = all.get(i);
+      if (targets.has(other)) continue;
+      const line = api.GetLine(openModel, other);
+      if (!isRef(line, targets)) continue;
+      const name = api.GetNameFromTypeCode(api.GetLineType(openModel, other));
+      if (name.startsWith('IfcRel')) {
+        const entries = Object.entries(line as Record<string, unknown>);
+        const scalarReference = entries.some(([, value]) => !Array.isArray(value) && isRef(value, targets));
+        if (scalarReference) {
+          api.DeleteLine(openModel, other);
         } else {
-          api.WriteLine(openModel, removeRef(line, id) as never);
+          let hasRelatedObjects = false;
+          for (const [key, value] of entries) {
+            if (!Array.isArray(value) || !isRef(value, targets)) continue;
+            line[key] = value.filter((candidate) => !isRef(candidate, targets));
+            hasRelatedObjects ||= line[key].length > 0;
+          }
+          if (hasRelatedObjects) api.WriteLine(openModel, line);
+          else api.DeleteLine(openModel, other);
         }
+      } else {
+        api.WriteLine(openModel, removeRef(line, targets) as never);
       }
-      api.DeleteLine(openModel, id);
     }
-    return { changed: ids, summary: `deleted ${ids.length} element(s)` };
+    targets.forEach((id) => api.DeleteLine(openModel!, id));
+    const withOpenings = openings.length ? ` and ${openings.length} opening(s)` : '';
+    return { changed: [...targets], summary: `deleted ${ids.length} element(s)${withOpenings}` };
   }
 
   if (command.kind === 'setProperty') {
@@ -792,20 +888,49 @@ function applyCommand(command: Exclude<DocumentCommand, { kind: 'script' }>): Ap
   };
 }
 
+function classCounts(model: number): Map<string, number> {
+  const byType = new Map<number, number>();
+  const all = api.GetAllLines(model);
+  for (let i = 0; i < all.size(); i++) {
+    const type = api.GetLineType(model, all.get(i));
+    byType.set(type, (byType.get(type) ?? 0) + 1);
+  }
+  return new Map([...byType].map(([type, count]) => [api.GetNameFromTypeCode(type), count]));
+}
+
+function classDelta(before: Map<string, number>, after: Map<string, number>): Record<string, number> {
+  const delta: Record<string, number> = {};
+  for (const name of new Set([...before.keys(), ...after.keys()])) {
+    const change = (after.get(name) ?? 0) - (before.get(name) ?? 0);
+    if (change) delta[name] = change;
+  }
+  return delta;
+}
+
 async function execute(command: DocumentCommand, standalone: number[] = [], title?: string) {
   const current = requireDocument();
-  if (openModel == null) throw new Error('no project is open');
+  if (openModel == null) throw new ModelUnavailable();
+  const timing: Record<string, number> = {};
+  let lapStarted = performance.now();
+  const lap = (name: string) => {
+    const now = performance.now();
+    timing[name] = Math.round(now - lapStarted);
+    lapStarted = now;
+  };
+  const countsBefore = classCounts(openModel);
   const before = api.SaveModel(openModel);
+  lap('snapshot_ms');
   let phase = 'apply command';
   try {
     const applied = command.kind === 'script' ? await applyScript(command, before) : applyCommand(command);
+    lap('apply_ms');
     phase = 'serialize candidate';
     const saved = applied.bytes ?? api.SaveModel(openModel);
+    lap('serialize_ms');
     // Saving is not sufficient: reopen the candidate before making it durable.
-    api.CloseModel(openModel);
     phase = 'reopen candidate';
-    openModel = api.OpenModel(saved, { COORDINATE_TO_ORIGIN: true });
-    if (openModel < 0) throw new Error('web-ifc could not reopen the edited model');
+    const class_delta = classDelta(countsBefore, classCounts(openIfc(saved, 'reopen edited model')));
+    lap('reopen_ms');
     current.revision += 1;
     current.cursor = current.revision;
     current.updatedAt = new Date().toISOString();
@@ -814,18 +939,19 @@ async function execute(command: DocumentCommand, standalone: number[] = [], titl
     history.push({ commandId, revision: current.revision, summary: applied.summary, title, createdAt: current.updatedAt, changed: applied.changed, command });
     phase = 'persist candidate';
     await commitProject(current, history, saved);
+    lap('persist_ms');
     phase = 'rebuild geometry';
     const rendered = await render(standalone.length ? standalone : applied.changed);
+    lap('render_ms');
     const result: CommandResult = {
       ok: true, commandId, revision: current.revision, summary: applied.summary, changed: applied.changed,
-      warnings: applied.warnings ?? [], output: applied.output,
+      warnings: applied.warnings ?? [], output: applied.output, timing: { ...timing, ...applied.timing }, class_delta,
     };
     return { rendered, command: result };
   } catch (error) {
-    if (openModel != null) api.CloseModel(openModel);
-    openModel = api.OpenModel(before, { COORDINATE_TO_ORIGIN: true });
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
-    throw new Error(`${phase}: ${detail}`);
+    const failure = `${phase}: ${errorText(error)}`;
+    restoreModel(before, failure);
+    throw new Error(failure);
   }
 }
 
@@ -850,32 +976,27 @@ async function revise(editId: string, values: Record<string, unknown>, replaceme
   if (!last || last.commandId !== editId) {
     throw new Error(`only the latest edit can be revised (latest: ${last?.commandId ?? 'none'}). Undo back to it, or make a new edit.`);
   }
-  if (openModel == null) throw new Error('no project is open');
+  if (openModel == null) throw new ModelUnavailable();
   const command = revisedCommand(last.command as DocumentCommand, values, replacements);
   const parent = current.cursor - 1;
   const latest = api.SaveModel(openModel);
   const parentData = await loadRevision(current.id, parent);
-  api.CloseModel(openModel);
-  openModel = api.OpenModel(parentData, { COORDINATE_TO_ORIGIN: true });
+  openIfc(parentData, 'open parent revision to revise');
   current.revision = parent;
   current.cursor = parent;
   try {
     return await execute(command, [], last.title);
   } catch (error) {
-    if (openModel != null) api.CloseModel(openModel);
-    openModel = api.OpenModel(latest, { COORDINATE_TO_ORIGIN: true });
     current.revision = parent + 1;
     current.cursor = parent + 1;
+    restoreModel(latest, errorText(error));
     throw error;
   }
 }
 
 async function render(standalone: number[]) {
-  if (openModel == null) throw new Error('no project is open');
-  const saved = api.SaveModel(openModel);
-  api.CloseModel(openModel);
-  openModel = null;
-  return openData(saved, standalone);
+  if (openModel == null) throw new ModelUnavailable();
+  return openData(api.SaveModel(openModel), standalone);
 }
 
 function revisions(): RevisionInfo[] {
@@ -991,7 +1112,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         }, opened.transfer);
       }
     } catch (err) {
-      post({ type: 'error', id: request.id, code: 'DOCUMENT_ERROR', message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+      post({ type: 'error', id: request.id, code: 'DOCUMENT_ERROR', message: errorText(err) });
     }
   });
 };

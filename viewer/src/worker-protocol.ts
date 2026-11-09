@@ -94,6 +94,10 @@ export type CommandResult = {
   warnings: string[];
   /** Scripted edits only: what the script printed. */
   output?: string;
+  /** For the trace, not the model: milliseconds per phase of the edit. */
+  timing?: Record<string, number>;
+  /** For the trace, not the model: change in entity count per IFC class. */
+  class_delta?: Record<string, number>;
 };
 
 export type AgentQuery =
@@ -129,8 +133,15 @@ export type WorkerRequest =
   | (RequestBase & { type: 'jumpRevision'; documentId: string; baseRevision: number; target: number; reuse: boolean })
   | (RequestBase & { type: 'cancel'; requestId: number });
 
+/** One attempt to open a model in web-ifc, for the agent trace. */
+export type ModelEvent = {
+  at: string; reason: string; ok: boolean; ms: number; bytes: number;
+  opened: number | null; closed: number | null; heap_bytes: number | null; error?: string;
+};
+
 export type WorkerResponse =
   | { type: 'progress'; id?: number; message: string }
+  | { type: 'modelEvent'; event: ModelEvent }
   | { type: 'projects'; id: number; projects: ProjectSummary[] }
   | { type: 'opened'; id: number; document: DocumentSummary; result: LoadResult }
   | { type: 'rendered'; id: number; document: DocumentSummary; result: LoadResult }

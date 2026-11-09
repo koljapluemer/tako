@@ -2,14 +2,14 @@
 
 type Base = { id: number };
 export type PythonRequest =
-  | (Base & { type: 'run'; bytes: Uint8Array; code: string; values: Record<string, unknown>; commit: boolean })
+  | (Base & { type: 'run'; bytes: Uint8Array; code: string; values: Record<string, unknown>; commit: boolean; indexKey: string })
   | (Base & { type: 'help'; topic?: string });
 export type PythonReply =
   | { progress: string }
   | { id: number; result: unknown }
   | { id: number; error: string; fatal: boolean };
 
-export type ScriptResult = { output: string; changed: number[]; verify: { ok: boolean; problems: string[] }; bytes: Uint8Array };
+export type ScriptResult = { output: string; changed: number[]; verify: { ok: boolean; problems: string[] }; bytes: Uint8Array; timing: Record<string, number> };
 
 type Waiting = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 const waiting = new Map<number, Waiting>();
@@ -56,13 +56,14 @@ export async function runScript(
   code: string,
   values: Record<string, unknown>,
   commit: boolean,
+  indexKey: string,
   progress: (message: string) => void,
 ): Promise<ScriptResult> {
   onProgress = progress;
   // A copy, because `model` may be a view that the caller still needs for rollback.
   const bytes = model.slice();
   const reply = await call<(ScriptResult & { ok: true }) | { ok: false; output: string; error: string }>(
-    { type: 'run', id: next++, bytes, code, values, commit }, [bytes.buffer as ArrayBuffer],
+    { type: 'run', id: next++, bytes, code, values, commit, indexKey }, [bytes.buffer as ArrayBuffer],
   );
   if (!reply.ok) {
     const text = `the script failed and the model is unchanged\n${reply.error}${reply.output ? `\nprinted before the failure:\n${reply.output}` : ''}`;

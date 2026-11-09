@@ -45,6 +45,14 @@ vr-agent: setup
     adb reverse tcp:47833 tcp:47833
     node --env-file=deploy/.env bridge/dist/vr-agent.js
 
+# Run the agent benchmark against a running `just vr-agent`, with a throwaway project open in the viewer (see doc/agent-tracing.md)
+benchmark: setup
+    node bridge/dist/benchmark.js
+
+# Time and token summary of an agent trace; defaults to the newest in work/traces
+trace-report file="": setup
+    node bridge/dist/trace-report.js {{file}}
+
 # Download the external test models into viewer/public/samples/external (skips existing files)
 fetch-models:
     #!/usr/bin/env bash

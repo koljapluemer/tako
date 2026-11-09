@@ -24,8 +24,20 @@ one active tab. It never opens, stores, or validates an IFC file.
 The browser exposes model overview, semantic search, element inspection,
 nearby context, materials, focus, simple IFC attributes and properties,
 placement-aware move, relationship-aware deletion, mapped door/window
-resize, and undo/redo. Unsupported representation shapes are refused without
-committing; there is no arbitrary-code escape hatch.
+resize, undo/redo, and `run_ifcopenshell` for anything else. Unsupported
+representation shapes are refused without committing.
+
+`get_focus` and `get_element` include an element's relations (opening, host,
+openings, type), read from IFC relationships on demand, so resolving "this
+window" doesn't need a script. Deleting a door or window also deletes its
+opening, unless another filling still uses that opening.
+
+`run_ifcopenshell` scripts can read `si`, a spatial index whose first read
+tessellates the whole model. The Python worker keeps the last index built by a
+read-only script, keyed by project and latest command, so later scripts on the
+same model state reuse it. It keeps no copy of the model itself.
+
+Agent sessions from the headset are traced; see `agent-tracing.md`.
 
 All agent-facing lengths are metres. IFC unit conversion happens at the worker
 boundary. Spatial facts include provenance; exterior and facing currently use

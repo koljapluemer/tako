@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   changeRevision, exportModel, importProject, inspectElement, jumpToRevision, listProjects, listRevisions, loadNavigation, openProject, selectElement,
-  executeCommand, queryDocument, reviseEdit, type LoadedModel, type OpenedDocument,
+  executeCommand, modelEvents, onModelEvent, queryDocument, reviseEdit, type LoadedModel, type OpenedDocument,
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
@@ -352,6 +352,8 @@ agentWindow.__takoAgentDisconnect?.();
 const connect = (port: number) => connectAgent({
   port,
   document: () => activeDocument,
+  modelEvents,
+  onModelEvent,
   status: setStatus,
   query: queryDocument,
   execute: async (document, command, title) => {

@@ -8,6 +8,8 @@ import { createTrace } from './trace.js';
 const AGENT_PORT = 47832;
 /** The viewer also connects here, so this agent doesn't collide with a desktop Claude session on 47831. */
 const BRIDGE_PORT = 47833;
+/** The status text benchmark.ts waits for after asking for a reset. */
+const RESET_DONE = 'Claude restarted';
 const ROOT = join(import.meta.dirname, '../..');
 
 const SYSTEM_PROMPT = `The user is standing inside this building wearing a VR headset and speaks short requests, transcribed by speech recognition, so expect transcription slips. "This" or "that" means the element they point at: use get_focus. They cannot read long text or answer questions easily, so make a sensible assumption and act. Do not delete anything unless they explicitly asked for it. End with one plain sentence of at most 12 words saying what changed. No markdown.`;
@@ -57,12 +59,15 @@ function startClaude() {
 }
 
 function handleClaudeLine(line: string) {
-  let event: { type?: string; subtype?: string; result?: string; message?: { content?: Array<{ type: string; name?: string }> } };
+  let event: { type?: string; subtype?: string; result?: string; message?: { content?: Array<{ type: string; name?: string; input?: { commit?: boolean } }> } };
   try { event = JSON.parse(line); } catch { return; }
   trace.write('claude', { data: event });
   if (event.type === 'assistant') {
     for (const block of event.message?.content ?? []) {
-      if (block.type === 'tool_use') send({ type: 'status', text: TOOL_STATUS[(block.name ?? '').replace('mcp__tako-ifc__', '')] ?? 'Working…' });
+      if (block.type !== 'tool_use') continue;
+      const name = (block.name ?? '').replace('mcp__tako-ifc__', '');
+      const readOnly = name === 'run_ifcopenshell' && block.input?.commit === false;
+      send({ type: 'status', text: readOnly ? 'Inspecting the model…' : TOOL_STATUS[name] ?? 'Working…' });
     }
   } else if (event.type === 'result') {
     busy = false;
@@ -79,6 +84,21 @@ function prompt(text: string, speech?: Speech) {
   claude!.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`);
 }
 
+/** Gives the next request a fresh context. The old bridge must exit first, or the new one can't take its port. */
+function reset() {
+  trace.write('reset', {});
+  const restart = () => {
+    startClaude();
+    send({ type: 'status', text: RESET_DONE });
+  };
+  if (claude) {
+    claude.once('exit', restart);
+    claude.kill();
+  } else {
+    restart();
+  }
+}
+
 // --- headset connection ------------------------------------------------------------
 const server = new WebSocketServer({ host: '127.0.0.1', port: AGENT_PORT });
 server.on('connection', (socket, request) => {
@@ -90,8 +110,9 @@ server.on('connection', (socket, request) => {
   console.log('viewer connected');
   socket.on('message', (data) => {
     if (busy) return send({ type: 'error', text: 'Still working on the last request' });
-    const { text, speech } = JSON.parse(String(data)) as { text: string; speech?: Speech };
-    prompt(text, speech);
+    const message = JSON.parse(String(data)) as { text: string; speech?: Speech } | { reset: true };
+    if ('reset' in message) reset();
+    else prompt(message.text, message.speech);
   });
 });
 

@@ -8,6 +8,7 @@ import { createTrace } from './trace.js';
 
 type ToolOutcome = { result?: unknown; error?: string; trace?: Record<string, unknown> };
 type BrowserReply = ToolOutcome & { type: 'result'; id: string };
+type BrowserModelEvent = { type: 'model'; event: Record<string, unknown> };
 type Pending = { settle: (outcome: ToolOutcome) => void; timer: NodeJS.Timeout };
 
 let browser: WebSocket | null = null;
@@ -28,8 +29,12 @@ webSocketServer.on('connection', (socket, request) => {
   }
   browser = socket;
   socket.on('message', (data) => {
-    let reply: BrowserReply;
-    try { reply = JSON.parse(String(data)) as BrowserReply; } catch { return; }
+    let reply: BrowserReply | BrowserModelEvent;
+    try { reply = JSON.parse(String(data)) as BrowserReply | BrowserModelEvent; } catch { return; }
+    if (reply.type === 'model') {
+      trace.write('model', reply.event);
+      return;
+    }
     if (reply.type !== 'result') return;
     const call = pending.get(reply.id);
     if (!call) return;
@@ -77,7 +82,7 @@ const server = new McpServer({ name: 'tako-ifc', version: '0.2.0' }, {
   instructions: `Edit the IFC building open in the user's tako browser. Resolve references with find_elements and context_around; do not rely on authoring-tool names. Facts report their source. Use get_focus for "this" and follow-up context. Prefer the dedicated tools; for anything else, use context_around and kit_help first, then run_ifcopenshell with the kit. Follow-ups on the latest edit use revise_edit. All lengths are metres. The browser owns the model and revisions.`,
 });
 
-const ok = (result: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });
+const ok = (result: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(result) }] });
 const tool = <S extends z.ZodRawShape>(name: string, description: string, schema: S) =>
   server.tool(name, description, schema, (async (args: Record<string, unknown>) =>
     ok(await callTraced(name, args))) as never);
@@ -91,11 +96,11 @@ tool('find_elements', 'Find candidates by IFC class and derived spatial facts. I
   sort_by: z.enum(['width', 'height', 'length', 'north', 'south', 'east', 'west']).optional(),
   limit: z.number().int().min(1).max(100).default(20),
 });
-tool('get_element', 'Inspect one element by #expressID or GlobalId.', { element: z.string() });
+tool('get_element', 'Inspect one element by #expressID or GlobalId, including its relations: opening, host, openings and type.', { element: z.string() });
 tool('context_around', 'Describe an element and nearby building elements.', {
   target: z.string(), radius: z.number().positive().default(3), limit: z.number().int().min(1).max(100).default(40),
 });
-tool('get_focus', 'Return the element selected in the browser and the latest edit.', {});
+tool('get_focus', 'Return the element selected in the browser, with its relations (opening, host, openings, type), and the latest edit.', {});
 tool('list_materials', 'List materials found on rendered products and their usage counts.', {});
 tool('set_name', 'Set the IFC Name of one or more elements as one atomic browser revision.', {
   elements: z.array(z.string()).min(1), name: z.string().min(1),
@@ -119,11 +124,11 @@ tool('move_elements', 'Move products by a metre offset in IFC x/y/z coordinates 
   elements: z.array(z.string()).min(1), x: z.number().default(0), y: z.number().default(0), z: z.number().default(0),
   title,
 });
-tool('delete_elements', 'Delete elements and direct relationships. Requires the literal confirmation token CONFIRM_DELETE after user approval.', {
+tool('delete_elements', 'Delete elements and direct relationships. Deleting a door or window also removes its opening, so the wall closes; no need to list the opening. Requires the literal confirmation token CONFIRM_DELETE after user approval.', {
   elements: z.array(z.string()).min(1), confirmation_token: z.literal('CONFIRM_DELETE'),
   title,
 });
-tool('run_ifcopenshell', 'Run Python against the open model, for any edit or question no other tool covers. Names available: f (ifcopenshell.file), si (SpatialIndex, built on first use: si.facts[id] has world bbox, storey, exterior, host; si.rooms has the IfcSpaces), kit (building blocks in metres; see kit_help), ifcopenshell, api (ifcopenshell.api), ue (ifcopenshell.util.element), PARAMS. Assign a list of changed expressIDs to `changed` so the viewer highlights them and they are verified. Print to return output. The model is rolled back if the code raises. Use commit=false for read-only inspection. Put sizes and options in params and read them from PARAMS, so a follow-up can change them with revise_edit.', {
+tool('run_ifcopenshell', 'Run Python against the open model, for any edit or question no other tool covers. Names available: f (ifcopenshell.file), si (SpatialIndex: si.facts[id] has world bbox, storey, exterior, host; si.rooms has the IfcSpaces. The first read for a model state tessellates the whole model and can take minutes, so use get_focus or get_element for one element and keep si for whole-model questions. It describes the model as the script started, so read it before changing anything), kit (building blocks in metres; see kit_help), ifcopenshell, api (ifcopenshell.api), ue (ifcopenshell.util.element), PARAMS. Assign a list of changed expressIDs to `changed` so the viewer highlights them and they are verified. Print to return output. The model is rolled back if the code raises. Use commit=false for read-only inspection. Put sizes and options in params and read them from PARAMS, so a follow-up can change them with revise_edit.', {
   code: z.string().min(1), summary: z.string().min(1).describe('What the edit did.'),
   commit: z.boolean().default(true), params: z.record(z.string(), z.unknown()).optional(),
   title,

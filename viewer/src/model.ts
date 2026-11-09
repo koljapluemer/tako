@@ -3,7 +3,7 @@ import { Collision, NavMesh } from './collision';
 import type { NavLevel, NavPoint } from './nav/points';
 import {
   PROTOCOL_VERSION,
-  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ProjectSummary, type RevisionInfo, type TextReplacement,
+  type AgentQuery, type DocumentCommand, type DocumentSummary, type LoadResult, type ModelEvent, type ProjectSummary, type RevisionInfo, type TextReplacement,
   type StoreyInfo, type WorkerRequest, type WorkerResponse,
 } from './worker-protocol';
 
@@ -32,7 +32,7 @@ export type LoadedModel = {
 
 const worker = new Worker(new URL('./ifc-worker.ts', import.meta.url), { type: 'module' });
 
-type Reply = Exclude<WorkerResponse, { type: 'progress' }>;
+type Reply = Exclude<WorkerResponse, { type: 'progress' } | { type: 'modelEvent' }>;
 type Pending = { resolve: (value: Reply) => void; reject: (err: Error) => void };
 const pending = new Map<number, Pending>();
 let nextId = 1;
@@ -41,9 +41,23 @@ let workerDocument: DocumentSummary | null = null;
 
 export const currentDocument = () => workerDocument;
 
+/** Every open since the page loaded, so a bridge that connects later can still trace a failed one. */
+export const modelEvents: ModelEvent[] = [];
+const modelEventListeners = new Set<(event: ModelEvent) => void>();
+
+export function onModelEvent(listener: (event: ModelEvent) => void): () => void {
+  modelEventListeners.add(listener);
+  return () => modelEventListeners.delete(listener);
+}
+
 worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
   const msg = event.data;
   if (msg.type === 'progress') return onProgress(msg.message);
+  if (msg.type === 'modelEvent') {
+    modelEvents.push(msg.event);
+    modelEventListeners.forEach((listener) => listener(msg.event));
+    return;
+  }
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);

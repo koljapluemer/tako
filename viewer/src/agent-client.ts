@@ -1,16 +1,31 @@
 import type { OpenedDocument } from './model';
-import type { AgentQuery, CommandResult, DocumentCommand, DocumentSummary, TextReplacement } from './worker-protocol';
+import type { AgentQuery, CommandResult, DocumentCommand, DocumentSummary, ModelEvent, TextReplacement } from './worker-protocol';
 
 type ToolRequest = { type: 'tool'; id: string; name: string; args: Record<string, unknown> };
-type ToolTrace = { browser_ms: number; publish_ms?: number; revision_before?: number; revision_after?: number };
+type ToolTrace = {
+  browser_ms: number; swap_ms?: number; revision_before?: number; revision_after?: number;
+  phases?: Record<string, number>; class_delta?: Record<string, number>;
+};
 type ToolReply = { type: 'result'; id: string; result?: unknown; error?: string; trace: ToolTrace };
 type Edit = OpenedDocument & { command: CommandResult };
 
+/** How many past opens a newly connected bridge gets: enough to show what led up to a failure. */
+const MODEL_EVENT_REPLAY = 20;
+
 const queryMethods = new Set(['model_overview', 'find_elements', 'get_element', 'context_around', 'get_focus', 'list_materials', 'kit_help']);
+
+/** Timing and class counts belong in the trace; the model would only pay tokens to read them. */
+function splitTraceFields(result: unknown): { visible: unknown; traced: Pick<ToolTrace, 'phases' | 'class_delta'> } {
+  if (!result || typeof result !== 'object' || !('timing' in result)) return { visible: result, traced: {} };
+  const { timing, class_delta, ...visible } = result as { timing?: Record<string, number>; class_delta?: Record<string, number> };
+  return { visible, traced: { phases: timing, class_delta } };
+}
 
 export function connectAgent(options: {
   port: number;
   document: () => DocumentSummary | null;
+  modelEvents: readonly ModelEvent[];
+  onModelEvent: (listener: (event: ModelEvent) => void) => () => void;
   changed: (opened: OpenedDocument, summary: string, ids: number[]) => Promise<void>;
   status: (message: string) => void;
   query: (query: AgentQuery) => Promise<unknown>;
@@ -23,15 +38,17 @@ export function connectAgent(options: {
   let retry: number | null = null;
 
   const reply = (message: ToolReply) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify(message));
+  const sendModelEvent = (event: ModelEvent) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'model', event }));
+  const stopModelEvents = options.onModelEvent(sendModelEvent);
 
-  const call = async (name: string, args: Record<string, unknown>, timing: { publish_ms?: number } = {}): Promise<unknown> => {
+  const call = async (name: string, args: Record<string, unknown>, timing: { swap_ms?: number } = {}): Promise<unknown> => {
     if (queryMethods.has(name)) return options.query({ method: name, params: args } as AgentQuery);
     const document = options.document();
     if (!document) throw new Error('no browser project is open');
     const publish = async (changed: Edit) => {
-      const publishing = performance.now();
+      const swapping = performance.now();
       await options.changed(changed, changed.command.summary, changed.command.changed);
-      timing.publish_ms = Math.round(performance.now() - publishing);
+      timing.swap_ms = Math.round(performance.now() - swapping);
       return changed.command;
     };
     if (name === 'undo' || name === 'redo') return publish(await options.revision(name, document));
@@ -88,13 +105,13 @@ export function connectAgent(options: {
   const handle = async (request: ToolRequest) => {
     const started = performance.now();
     const revision_before = options.document()?.revision;
-    const timing: { publish_ms?: number } = {};
+    const timing: { swap_ms?: number } = {};
     const trace = (): ToolTrace => ({
       browser_ms: Math.round(performance.now() - started), ...timing, revision_before, revision_after: options.document()?.revision,
     });
     try {
-      const result = await call(request.name, request.args, timing);
-      reply({ type: 'result', id: request.id, result, trace: trace() });
+      const { visible, traced } = splitTraceFields(await call(request.name, request.args, timing));
+      reply({ type: 'result', id: request.id, result: visible, trace: { ...trace(), ...traced } });
     } catch (error) {
       reply({ type: 'result', id: request.id, error: error instanceof Error ? error.message : String(error), trace: trace() });
     }
@@ -102,12 +119,16 @@ export function connectAgent(options: {
 
   const open = () => {
     if (stopped) return;
-    if (!options.document()) {
+    // A failed first load leaves no document, and is exactly what the trace needs to hear about.
+    if (!options.document() && options.modelEvents.every((event) => event.ok)) {
       retry = window.setTimeout(open, 500);
       return;
     }
     socket = new WebSocket(`ws://127.0.0.1:${options.port}`);
-    socket.addEventListener('open', () => options.status('Claude bridge connected'));
+    socket.addEventListener('open', () => {
+      if (options.document()) options.status('Claude bridge connected');
+      options.modelEvents.slice(-MODEL_EVENT_REPLAY).forEach(sendModelEvent);
+    });
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as ToolRequest;
       if (message.type === 'tool') void handle(message);
@@ -122,6 +143,7 @@ export function connectAgent(options: {
     call,
     disconnect: () => {
       stopped = true;
+      stopModelEvents();
       if (retry != null) clearTimeout(retry);
       socket?.close();
     },

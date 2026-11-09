@@ -1,0 +1,22 @@
+[
+  {
+    "id": "count-windows",
+    "text": "How many windows does this building have?",
+    "expect": { "revisions": 0 }
+  },
+  {
+    "id": "rename-wall",
+    "text": "Rename any one wall on the lowest storey to Benchmark Wall.",
+    "expect": { "revisions": 1, "class_delta": { "IfcWall": 0 } }
+  },
+  {
+    "id": "delete-window",
+    "text": "Delete any one window on the lowest storey.",
+    "expect": { "revisions": 1, "class_delta": { "IfcWindow": -1, "IfcOpeningElement": -1 } }
+  },
+  {
+    "id": "add-door",
+    "text": "Add a door to any wall on the lowest storey that has room for it.",
+    "expect": { "revisions": 1, "class_delta": { "IfcDoor": 1, "IfcOpeningElement": 1 } }
+  }
+]

@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-// IfcOpenShell in Pyodide, for scripted edits. It holds no model between runs: IFC bytes in, IFC bytes out.
+// IfcOpenShell in Pyodide, for scripted edits. It holds no model between runs, only derived facts: IFC bytes in, IFC bytes out.
 import type { PythonReply, PythonRequest } from './client';
 
 const PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.29.0/full/';
@@ -14,12 +14,15 @@ const sources = import.meta.glob('./py/**/*.py', { query: '?raw', import: 'defau
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Pyodide = any;
 let ready: Promise<Pyodide> | null = null;
+/** How long the cold start took, until a script's timing has reported it. */
+let loadMs: number | undefined;
 
 const send = (message: PythonReply, transfer: Transferable[] = []) =>
   (self as DedicatedWorkerGlobalScope).postMessage(message, transfer);
 
 async function load(): Promise<Pyodide> {
   send({ progress: 'Loading Python for the scripted edit…' });
+  const started = performance.now();
   const { loadPyodide } = await import(/* @vite-ignore */ `${PYODIDE}pyodide.mjs`);
   const py = await loadPyodide({ indexURL: PYODIDE });
   await py.loadPackage('micropip');
@@ -28,13 +31,18 @@ async function load(): Promise<Pyodide> {
   py.FS.mkdirTree('/tako-py/tako/kit_examples');
   for (const [path, text] of Object.entries(sources)) py.FS.writeFile(`/tako-py/tako/${path.slice('./py/'.length)}`, text);
   await py.runPythonAsync("import sys\nsys.path.insert(0, '/tako-py')\nimport tako.runner");
+  loadMs = Math.round(performance.now() - started);
   return py;
 }
 
 function run(py: Pyodide, request: Extract<PythonRequest, { type: 'run' }>) {
   py.FS.writeFile(SOURCE, request.bytes);
   try {
-    const reply = JSON.parse(py.pyimport('tako.runner').run(SOURCE, OUTPUT, request.code, JSON.stringify(request.values), request.commit) as string);
+    const reply = JSON.parse(py.pyimport('tako.runner').run(SOURCE, OUTPUT, request.code, JSON.stringify(request.values), request.commit, request.indexKey) as string);
+    if (reply.ok && loadMs != null) {
+      reply.timing.pyodide_load_ms = loadMs;
+      loadMs = undefined;
+    }
     if (!reply.ok || !request.commit) return { result: reply, transfer: [] };
     const bytes = (py.FS.readFile(OUTPUT) as Uint8Array).slice();
     return { result: { ...reply, bytes }, transfer: [bytes.buffer as ArrayBuffer] };

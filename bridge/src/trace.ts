@@ -2,10 +2,14 @@
 //
 // Every line has ts, session, source and event. The events are:
 //   tool     (bridge)   one MCP tool call: tool, args, ms, ok, error, result_bytes, and from the browser
-//                       browser_ms, publish_ms (viewer reload), revision_before, revision_after
+//                       browser_ms, swap_ms (scene swap and project picker refresh, after geometry is built),
+//                       revision_before, revision_after, phases (ms per edit or script phase), class_delta (entity count change per IFC class)
+//   model    (bridge)   one attempt to open a model in web-ifc: at (when the browser did it), reason, ok, ms, bytes, opened, closed, heap_bytes, error
 //   request  (vr-agent) one spoken or typed request: text, record_ms, transcribe_ms
 //   claude   (vr-agent) one raw Claude stream event: data
+//   reset    (vr-agent) Claude was restarted so the next request starts without context
 //   exit     (vr-agent) the Claude process stopped: code
+// doc/agent-tracing.md explains how to read them.
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
