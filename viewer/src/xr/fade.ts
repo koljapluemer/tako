@@ -13,7 +13,8 @@ export class Fade {
   private shell: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private hint: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
-  constructor(camera: THREE.Camera) {
+  /** `drawn`: false keeps the bookkeeping but never darkens the view, for debugging. */
+  constructor(camera: THREE.Camera, private drawn = true) {
     this.shell = new THREE.Mesh(
       new THREE.SphereGeometry(0.3, 16, 12),
       new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, transparent: true, opacity: 0, depthTest: false, depthWrite: false }),
@@ -64,6 +65,10 @@ export class Fade {
     a.done();
   }
 
+  describe() {
+    return [...this.levels].map(([channel, level]) => `${channel} ${level.toFixed(2)}`).join(' ') || 'none';
+  }
+
   showHint(opacity: number) {
     this.hint.material.opacity = opacity;
     this.hint.visible = opacity > 0.01;
@@ -77,7 +82,7 @@ export class Fade {
     }
     const level = Math.max(0, ...this.levels.values());
     this.shell.material.opacity = level;
-    this.shell.visible = level > 0.001;
+    this.shell.visible = this.drawn && level > 0.001;
   }
 
   /** The render loop stops with the session, so anything still waiting must be released. */

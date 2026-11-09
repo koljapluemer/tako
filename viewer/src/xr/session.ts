@@ -73,7 +73,7 @@ export class XRWalk {
     this.rig.add(camera);
     scene.add(this.rig);
 
-    this.fade = new Fade(camera);
+    this.fade = new Fade(camera, !Hud.enabled());
     this.walking = new Walking(this.rig, camera, this.fade);
     const floorY = () => this.walking.floorY;
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
@@ -378,6 +378,32 @@ export class XRWalk {
   // --- frame -----------------------------------------------------------------
   update() {
     const now = performance.now();
+    if (!this.hud) return this.frame(now);
+    try {
+      this.frame(now);
+    } catch (err) {
+      console.error(err);
+      this.hud.error(err);
+    }
+    this.hud.update(now, this.debugState());
+  }
+
+  private debugState() {
+    const { model, spawn, walking } = this;
+    const text = (v: THREE.Vector3) => `${v.x.toFixed(1)} ${v.y.toFixed(1)} ${v.z.toFixed(1)}`;
+    this.camera.getWorldPosition(head);
+    return [
+      `placing ${this.needsPlacement} f${this.sessionFrames}`,
+      `model ${model != null} nav ${model?.nav != null}`,
+      `space ${this.spaceReady}`,
+      `fade ${this.fade.describe()}`,
+      `head ${text(head)}`,
+      `floor ${walking.floorY.toFixed(1)} wall ${model ? model.collision.distanceTo(head, 0.5).toFixed(2) : '-'}`,
+      `spawn ${spawn ? text(spawn.position) : 'none'}`,
+    ];
+  }
+
+  private frame(now: number) {
     // Clamped so a hitch can't turn into a jump in the floor-following damping.
     const dt = Math.min((now - this.previous) / 1000, 0.1);
     this.previous = now;
@@ -406,7 +432,6 @@ export class XRWalk {
       }),
       rays,
     });
-    this.hud?.update(now);
     this.fade.update(now);
   }
 }
