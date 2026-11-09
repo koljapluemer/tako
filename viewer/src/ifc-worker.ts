@@ -1,13 +1,14 @@
-import type { Vec3 } from './xr/paint-log';
 /// <reference lib="webworker" />
 // Parses IFC off the main thread: a stalled frame in a headset is physically unpleasant.
 import { BufferAttribute, BufferGeometry, Matrix3, Matrix4, Vector3 } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { boundsOf, buildNavmesh, initNavmesh, type Bounds as NavBounds, type NavInput } from './nav/navmesh';
 import { generatePoints, type NavDoor, type NavLevel, type NavPoint, type NavSpace } from './nav/points';
+import { compassOf, compassVector, viewerBoundsToIfc, viewerToIfc, type Compass, type North } from './ifc-frame';
 import { cellKey } from './render-cells';
+import type { Vec3 } from './xr/paint-log';
 import {
-  IFCBUILDINGSTOREY, IFCSPACE, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
+  IFCBUILDINGSTOREY, IFCGEOMETRICREPRESENTATIONCONTEXT, IFCSPACE, IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM,
   IFCRELAGGREGATES, IFCRELCONTAINEDINSPATIALSTRUCTURE,
   IFCREAL, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE, IFCRELFILLSELEMENT, IFCRELVOIDSELEMENT, IFCSIUNIT, IFCSITE, IfcAPI,
 } from 'web-ifc';
@@ -50,6 +51,9 @@ type SemanticFact = {
 };
 
 let semanticFacts = new Map<number, SemanticFact>();
+/** Set alongside `semanticFacts`: the coordination shift only exists once geometry has been streamed. */
+let viewerShift: Vec3 = [0, 0, 0];
+let trueNorth: North = [0, 1];
 /** Why the last open failed; cleared by the next one that succeeds. */
 let modelFailure: string | null = null;
 
@@ -391,15 +395,18 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   }, null);
   // Tessellated geometry is already in metres; only IFC attribute values are in model units.
   const attributeUnit = metresPerModelUnit();
+  const coordination = api.GetCoordinationMatrix(modelID);
+  viewerShift = [coordination[12], coordination[13], coordination[14]];
+  trueNorth = readTrueNorth(modelID);
   semanticFacts = new Map([...allBounds].map(([id, b]) => {
     const line = api.GetLine(modelID, id);
     const dx = b.max.x - b.min.x;
     const dy = b.max.y - b.min.y;
     const dz = b.max.z - b.min.z;
     const distances = envelope ? [
-      ['west', Math.abs(b.min.x - envelope.min.x)], ['east', Math.abs(envelope.max.x - b.max.x)],
-      ['south', Math.abs(b.min.z - envelope.min.z)], ['north', Math.abs(envelope.max.z - b.max.z)],
-    ] as Array<[string, number]> : [];
+      [[-1, 0], Math.abs(b.min.x - envelope.min.x)], [[1, 0], Math.abs(envelope.max.x - b.max.x)],
+      [[0, 1], Math.abs(b.min.z - envelope.min.z)], [[0, -1], Math.abs(envelope.max.z - b.max.z)],
+    ] as Array<[[number, number], number]> : []; // each side's outward direction in the IFC plan
     distances.sort((a, c) => a[1] - c[1]);
     const tolerance = Math.max(0.25, Math.min(envelope ? envelope.max.x - envelope.min.x : 0, envelope ? envelope.max.z - envelope.min.z : 0) * 0.01);
     const exterior = Boolean(distances.length && distances[0][1] <= tolerance);
@@ -411,7 +418,7 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
       width: line.OverallWidth?.value != null ? Number(line.OverallWidth.value) * attributeUnit : Math.min(dx, dz),
       height: line.OverallHeight?.value != null ? Number(line.OverallHeight.value) * attributeUnit : dy,
       length: Math.max(dx, dz), exterior,
-      exteriorSource: 'geometry', facing: exterior ? distances[0][0] : null, facingSource: exterior ? 'geometry' : null,
+      exteriorSource: 'geometry', facing: exterior ? compassOf(distances[0][0], trueNorth) : null, facingSource: exterior ? 'geometry' : null,
     };
     return [id, fact];
   }));
@@ -507,10 +514,15 @@ async function inspect(expressID: number): Promise<ElementInfo | null> {
   };
 }
 
+function ifcBoxRounded(fact: SemanticFact) {
+  const { min, max } = viewerBoundsToIfc(fact.min as Vec3, fact.max as Vec3, viewerShift);
+  return { min: min.map((n) => Number(n.toFixed(3))), max: max.map((n) => Number(n.toFixed(3))) };
+}
+
 const factDescription = (fact: SemanticFact) => ({
   id: `#${fact.id}`, global_id: fact.globalId, class: fact.ifcClass, name: fact.name, storey: fact.storey,
   width_m: Number(fact.width.toFixed(3)), height_m: Number(fact.height.toFixed(3)), length_m: Number(fact.length.toFixed(3)),
-  bbox_m: { min: fact.min.map((n) => Number(n.toFixed(3))), max: fact.max.map((n) => Number(n.toFixed(3))) },
+  bbox_m: ifcBoxRounded(fact),
   exterior: fact.exterior, exterior_source: fact.exteriorSource, facing: fact.facing, facing_source: fact.facingSource,
 });
 
@@ -571,15 +583,13 @@ const PAINT_DETAILS_PER_COLOUR = 12;
 
 /** The request's scene context as compact text, in IFC world metres. Viewer geometry is Y-up metres plus the coordination shift. */
 function interactionContext({ head, forward, floor, paint }: Extract<AgentQuery, { method: 'interaction_context' }>['params']): string {
-  const shift = Array.from(api.GetCoordinationMatrix(openModel!));
-  const toIfc = ([x, y, z]: Vec3): Vec3 => [x - shift[12], shift[14] - z, y - shift[13]];
   const num = (n: number) => String(Number(n.toFixed(2)));
   const point = (p: Vec3) => `(${p.map(num).join(', ')})`;
 
   const storey = floor != null ? semanticFacts.get(floor)?.storey : null;
   const lines = [
     '[current state, for this request only; IFC world metres, Z up]',
-    `Standing: head at ${point(toIfc(head))}${storey ? `, storey ${storey}` : ''}, facing (${num(forward[0])}, ${num(-forward[2])})`,
+    `Standing: head at ${point(viewerToIfc(head, viewerShift))}${storey ? `, storey ${storey}` : ''}, facing (${num(forward[0])}, ${num(-forward[2])})`,
   ];
   const colours = paint.flatMap(({ color, elements }) => {
     const known = elements.filter(({ id }) => semanticFacts.has(id));
@@ -587,9 +597,9 @@ function interactionContext({ head, forward, floor, paint }: Extract<AgentQuery,
     return [`${color}: ${known.map(({ id, dots, center, min, max }, index) => {
       const fact = semanticFacts.get(id)!;
       if (index >= PAINT_DETAILS_PER_COLOUR) return `#${id} ${fact.ifcClass} ×${dots}`;
-      const [a, b] = [toIfc(min), toIfc(max)];
-      const size = a.map((n, axis) => num(Math.abs(b[axis] - n))).join('×');
-      return `#${id} ${fact.ifcClass}${fact.name ? ` "${fact.name}"` : ''} centre ${point(toIfc(center))} size ${size} dots ${dots}`;
+      const box = viewerBoundsToIfc(min, max, viewerShift);
+      const size = box.min.map((n, axis) => num(box.max[axis] - n)).join('×');
+      return `#${id} ${fact.ifcClass}${fact.name ? ` "${fact.name}"` : ''} centre ${point(viewerToIfc(center, viewerShift))} size ${size} dots ${dots}`;
     }).join('; ')}`];
   });
   if (colours.length) lines.push('Paint:', ...colours);
@@ -626,9 +636,12 @@ async function queryAgent(query: AgentQuery): Promise<unknown> {
     const key = p.sort_by;
     if (key === 'width' || key === 'height' || key === 'length') rows.sort((a, b) => b[key] - a[key]);
     else if (key && ['north', 'south', 'east', 'west'].includes(key)) {
-      const axis = key === 'north' || key === 'south' ? 2 : 0;
-      const direction = key === 'north' || key === 'east' ? -1 : 1;
-      rows.sort((a, b) => direction * ((b.min[axis] + b.max[axis]) - (a.min[axis] + a.max[axis])));
+      const [cx, cy] = compassVector(key as Compass, trueNorth);
+      const reach = (fact: SemanticFact) => {
+        const [x, y] = viewerToIfc([(fact.min[0] + fact.max[0]) / 2, 0, (fact.min[2] + fact.max[2]) / 2], viewerShift);
+        return x * cx + y * cy;
+      };
+      rows.sort((a, b) => reach(b) - reach(a));
     }
     return rows.slice(0, Math.max(1, Math.min(p.limit ?? 20, 100))).map(factDescription);
   }
@@ -699,6 +712,20 @@ function removeRef(value: unknown, ids: ReadonlySet<number>): unknown {
     if (isRef(child, ids)) object[key] = removeRef(child, ids);
   }
   return object;
+}
+
+/** The model context's TrueNorth, or +Y when it has none, matching the spatial index. */
+function readTrueNorth(modelID: number): North {
+  const contexts = api.GetLineIDsWithType(modelID, IFCGEOMETRICREPRESENTATIONCONTEXT);
+  for (let i = 0; i < contexts.size(); i++) {
+    const context = api.GetLine(modelID, contexts.get(i), true);
+    const ratios = context.TrueNorth?.DirectionRatios as Array<{ value: number }> | undefined;
+    if (!ratios || context.ContextType?.value !== 'Model') continue;
+    const [x, y] = [ratios[0].value, ratios[1].value];
+    const length = Math.hypot(x, y);
+    if (length > 0) return [x / length, y / length];
+  }
+  return [0, 1];
 }
 
 function metresPerModelUnit(): number {

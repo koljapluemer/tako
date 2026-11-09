@@ -44,7 +44,9 @@ when an edit touches what it marks.
 
 Agent sessions from the headset are traced; see `agent-tracing.md`.
 
-All agent-facing lengths are metres. IFC unit conversion happens at the worker
+All agent-facing lengths are metres and coordinates are IFC world, Z-up. The
+viewer's Y-up, origin-shifted frame stays internal; `ifc-frame.ts` converts it.
+Compass directions come from the model's TrueNorth, or +Y without one. IFC unit conversion happens at the worker
 boundary. Spatial facts include provenance; exterior and facing currently use
 the tessellated building envelope and are labelled as geometric inference.
 

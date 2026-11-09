@@ -79,7 +79,7 @@ async function callTraced(name: string, args: Record<string, unknown>): Promise<
 }
 
 const server = new McpServer({ name: 'tako-ifc', version: '0.2.0' }, {
-  instructions: `Edit the IFC building open in the user's tako browser. Resolve references with find_elements and context_around; do not rely on authoring-tool names. Facts report their source. Use get_focus for "this" and follow-up context. Prefer the dedicated tools; for anything else, use context_around and kit_help first, then run_ifcopenshell with the kit. Follow-ups on the latest edit use revise_edit. All lengths are metres. The browser owns the model and revisions.`,
+  instructions: `Edit the IFC building open in the user's tako browser. Resolve references with find_elements and context_around; do not rely on authoring-tool names. Facts report their source. Use get_focus for "this" and follow-up context. Prefer the dedicated tools; for anything else, use context_around and kit_help first, then run_ifcopenshell with the kit. Follow-ups on the latest edit use revise_edit. All lengths are metres, and coordinates are IFC world coordinates with Z up. The browser owns the model and revisions.`,
 });
 
 const ok = (result: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(result) }] });
