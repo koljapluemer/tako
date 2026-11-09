@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 740" width="1120" height="740" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 830" width="1120" height="830" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">tako VR controls on Meta Quest controllers</title>
-  <desc id="desc">Pushing the right thumbstick forward aims a teleport, turning it while aiming chooses the landing direction, and releasing it teleports; left or right snap turns 30 degrees. Pushing the left thumbstick forward aims a straight ray that places the mini model and revision cards on the floor when released. A trigger presses a panel. Grip grabs the mini model. Holding X returns to the start.</desc>
+  <desc id="desc">Pushing the right thumbstick forward aims a teleport, turning it while aiming chooses the landing direction, and releasing it teleports; left or right snap turns 30 degrees. Pushing the left thumbstick forward aims a straight ray that places the mini model and revision cards on the floor when released. The left trigger presses a panel and the right trigger sprays paint while held. Grip grabs the mini model. Holding X returns to the start. Tapping A undoes the last paint stroke and holding it deletes all paint. Holding Y or B talks to the agent.</desc>
   <defs>
     <g id="controller">
       <!-- Trigger, behind the body; its colour comes from the use element -->
@@ -21,7 +21,7 @@
     </g>
   </defs>
 
-  <rect width="1120" height="740" fill="#fafaf7"/>
+  <rect width="1120" height="830" fill="#fafaf7"/>
 
   <text x="560" y="44" text-anchor="middle" font-size="26" font-weight="700" fill="#1c1917">tako VR controls</text>
   <text x="560" y="70" text-anchor="middle" font-size="14" fill="#57534e">Meta Quest controllers. Right hand moves you, left hand places the model.</text>
@@ -48,6 +48,14 @@
   <!-- X returns to the start -->
   <circle cx="232" cy="342" r="21" fill="#b45309"/>
   <polyline fill="none" stroke="#b45309" stroke-width="1.75" stroke-linejoin="round" points="232,363 232,570 380,570"/>
+
+  <!-- A undoes paint -->
+  <circle cx="888" cy="342" r="21" fill="#be185d"/>
+  <polyline fill="none" stroke="#be185d" stroke-width="1.75" stroke-linejoin="round" points="888,363 888,630 740,630"/>
+
+  <!-- Y and B talk -->
+  <circle cx="245" cy="282" r="21" fill="#4d7c0f"/>
+  <circle cx="875" cy="282" r="21" fill="#4d7c0f"/>
 
   <!-- Button letters are outside the mirrored group so they read correctly -->
   <g font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">
@@ -83,8 +91,8 @@
 
   <!-- Triggers -->
   <rect x="380" y="346" width="360" height="60" rx="10" fill="#ffffff" stroke="#dc2626" stroke-width="1.75"/>
-  <text x="396" y="370" font-size="16" font-weight="700" fill="#dc2626">Either trigger</text>
-  <text x="396" y="392" font-size="14" fill="#44403c">Press a panel</text>
+  <text x="396" y="370" font-size="16" font-weight="700" fill="#dc2626">Triggers</text>
+  <text x="396" y="392" font-size="14" fill="#44403c"><tspan font-weight="600">Left:</tspan> press panels   <tspan font-weight="600">Right:</tspan> hold to spray paint</text>
 
   <!-- Grip -->
   <rect x="380" y="422" width="360" height="84" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="1.75"/>
@@ -100,4 +108,16 @@
   <text x="396" y="546" font-size="16" font-weight="700" fill="#b45309">X button</text>
   <text x="472" y="546" font-size="16" font-weight="700" fill="#1c1917">Return to start</text>
   <text x="396" y="568" font-size="14" fill="#44403c"><tspan font-weight="600">Hold:</tspan> until the ring fills</text>
+
+  <!-- A button -->
+  <rect x="380" y="598" width="360" height="60" rx="10" fill="#ffffff" stroke="#be185d" stroke-width="1.75"/>
+  <text x="396" y="622" font-size="16" font-weight="700" fill="#be185d">A button</text>
+  <text x="472" y="622" font-size="16" font-weight="700" fill="#1c1917">Remove paint</text>
+  <text x="396" y="644" font-size="14" fill="#44403c"><tspan font-weight="600">Tap:</tspan> undo last stroke  <tspan font-weight="600">Hold:</tspan> delete all paint</text>
+
+  <!-- Y and B buttons -->
+  <rect x="380" y="674" width="360" height="60" rx="10" fill="#ffffff" stroke="#4d7c0f" stroke-width="1.75"/>
+  <text x="396" y="698" font-size="16" font-weight="700" fill="#4d7c0f">Y or B button</text>
+  <text x="510" y="698" font-size="16" font-weight="700" fill="#1c1917">Talk to the agent</text>
+  <text x="396" y="720" font-size="14" fill="#44403c"><tspan font-weight="600">Hold:</tspan> while you speak</text>
 </svg>

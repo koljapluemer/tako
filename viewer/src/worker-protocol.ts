@@ -1,3 +1,4 @@
+import type { PaintedColor, Vec3 } from './xr/paint-log';
 import type { SerializedBVH } from 'three-mesh-bvh';
 import type { NavLevel, NavPoint } from './nav/points';
 
@@ -108,7 +109,9 @@ export type AgentQuery =
   | { method: 'get_focus'; params?: Record<string, never> }
   | { method: 'list_materials'; params?: Record<string, never> }
   | { method: 'kit_help'; params: { topic?: string } }
-  | { method: 'inspect_with_script'; params: { code: string; values: Record<string, unknown> } };
+  | { method: 'inspect_with_script'; params: { code: string; values: Record<string, unknown> } }
+  /** Viewer-internal, in viewer coordinates: not an MCP tool. */
+  | { method: 'interaction_context'; params: { head: Vec3; forward: Vec3; floor: number | null; paint: PaintedColor[] } };
 
 export type TextReplacement = { old: string; new: string };
 

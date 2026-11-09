@@ -59,7 +59,16 @@ Needs a building with at least two revisions on the headset.
 ### Station
 - [ ] Left stick forward aims a straight ray that places the station on valid floor and refuses anything else; a new one replaces the old.
 - [ ] Right stick forward teleports and the left never does; turning the right stick while aiming sets the landing direction, and only the right stick snap turns.
-- [ ] A snap turn held and swung forward does not start a teleport, and triggers only press panels.
+- [ ] A snap turn held and swung forward does not start a teleport.
+- [ ] The left trigger presses panels and never sprays; the right trigger sprays until released, never presses or highlights a panel.
+
+### Spray paint
+- [ ] Paint lands on walls, floors, windows, doors and furniture, with no visible flicker. It reads well at room distance.
+- [ ] Frame rate holds while spraying, including near many doors. If not, raise `SPRAY_INTERVAL_MS` (`viewer/src/xr/session.ts`).
+- [ ] The right controller's tip shows the next colour; a pause changes it. Tune `GROUP_PAUSE_MS` (`viewer/src/xr/paint-log.ts`) if marking several things around a room splits into too many colours.
+- [ ] Tapping A undoes one stroke with no ring flash; holding A fills the ring and deletes all paint once; X still returns to the start.
+- [ ] Six colours in use refuses a seventh with a notice.
+- [ ] After a voice edit, colours on the changed elements go and the others stay in place, even if the origin shifts. Undo, a revision jump or a new building clears all paint.
 - [ ] Holding X fills the ring and returns once to the exact spot you started at, even if the navmesh finished after you entered; releasing early cancels, and it stays put while still held. Tune `RETURN_HOLD_MS` (`viewer/src/xr/session.ts`) and the ring size (`viewer/src/xr/hold-ring.ts`).
 - [ ] Model height and card distance feel right, and the cards read clearly. Tune `MODEL_HEIGHT`, `STAND_DISTANCE` and `CARD_HEIGHT` (`viewer/src/xr/station.ts`).
 - [ ] A station placed close to a wall is still usable: the model can clip into it.

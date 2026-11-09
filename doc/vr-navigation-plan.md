@@ -58,7 +58,12 @@ See `vr-controls.svg` for the full mapping.
   otherwise.
 - **Left stick:** push forward to aim a straight ray at the floor, release to
   place the station there. A new station replaces the old one.
-- **Either trigger:** press a panel.
+- **Left trigger:** press a panel.
+- **Right trigger:** hold to spray paint. A pause of 2 s starts the next colour,
+  shown on the right controller's tip.
+- **A:** tap to undo the last paint stroke, hold until the ring fills to delete
+  all paint.
+- **Y or B:** hold to talk to the agent.
 - The station turns to face the user once, when placed, and then stays put. It
   holds the mini model at about waist height, with the cards behind it, and
   Close and Buildings/Revisions buttons at either end of the cards.

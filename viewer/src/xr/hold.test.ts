@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { Hold } from './hold';
+import { Hold, TapHold } from './hold';
+
+describe('TapHold', () => {
+  it('taps on an early release', () => {
+    const button = new TapHold(800);
+    expect(button.update(true, 0).tap).toBe(false);
+    expect(button.update(true, 100).tap).toBe(false);
+    expect(button.update(false, 200).tap).toBe(true);
+    expect(button.update(false, 300).tap).toBe(false);
+  });
+
+  it('completes once on a long press, with no tap at release', () => {
+    const button = new TapHold(800);
+    button.update(true, 0);
+    expect(button.update(true, 800).progress).toBe(1);
+    expect(button.update(true, 900).progress).toBe(0);
+    expect(button.update(false, 1000).tap).toBe(false);
+  });
+
+  it('does not tap if the press was blocked at any point', () => {
+    const button = new TapHold(800);
+    button.update(true, 0);
+    button.update(true, 100, true);
+    button.update(true, 200);
+    expect(button.update(false, 300).tap).toBe(false);
+    button.update(true, 400);
+    expect(button.update(false, 500).tap).toBe(true);
+  });
+});
 
 describe('Hold', () => {
   it('reports progress and completes after the full duration', () => {

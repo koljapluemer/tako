@@ -12,7 +12,9 @@ const BRIDGE_PORT = 47833;
 const RESET_DONE = 'Claude restarted';
 const ROOT = join(import.meta.dirname, '../..');
 
-const SYSTEM_PROMPT = `The user is standing inside this building wearing a VR headset and speaks short requests, transcribed by speech recognition, so expect transcription slips. "This" or "that" means the element they point at: use get_focus. They cannot read long text or answer questions easily, so make a sensible assumption and act. Do not delete anything unless they explicitly asked for it. End with one plain sentence of at most 12 words saying what changed. No markdown.`;
+const SYSTEM_PROMPT = `The user is standing inside this building wearing a VR headset and speaks short requests, transcribed by speech recognition, so expect transcription slips. "This" or "that" means the element they point at: use get_focus. They cannot read long text or answer questions easily, so make a sensible assumption and act. Do not delete anything unless they explicitly asked for it. End with one plain sentence of at most 12 words saying what changed. No markdown.
+
+A request may start with a block describing the user's current state: where they stand, and anything they have spray-painted. Paint is a general way to point at elements and places, and it can mean whatever the request needs. A colour name selects that colour's group; "marked" or "painted" with no colour means all paint. Each line gives the painted element, the centre of the paint on it (a location in IFC world metres) and its size. Treat size as a dimension only if the user says so. Elements with few dots compared with others in their colour are probably over-spray, so leave them out unless the request clearly includes them. "This" without a colour still uses get_focus. Ignore state blocks from earlier requests.`;
 
 const TOOL_STATUS: Record<string, string> = {
   run_ifcopenshell: 'Editing the model…', revise_edit: 'Revising the edit…', kit_help: 'Reading the kit…',
@@ -76,12 +78,12 @@ function handleClaudeLine(line: string) {
   }
 }
 
-function prompt(text: string, speech?: Speech) {
+function prompt(text: string, speech?: Speech, context?: string) {
   if (!claude) startClaude();
   busy = true;
-  trace.write('request', { text, ...speech });
+  trace.write('request', { text, context, ...speech });
   send({ type: 'status', text: `Heard: ${text}` });
-  claude!.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`);
+  claude!.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: context ? `${context}\n\nRequest: ${text}` : text } })}\n`);
 }
 
 /** Gives the next request a fresh context. The old bridge must exit first, or the new one can't take its port. */
@@ -110,9 +112,9 @@ server.on('connection', (socket, request) => {
   console.log('viewer connected');
   socket.on('message', (data) => {
     if (busy) return send({ type: 'error', text: 'Still working on the last request' });
-    const message = JSON.parse(String(data)) as { text: string; speech?: Speech } | { reset: true };
+    const message = JSON.parse(String(data)) as { text: string; speech?: Speech; context?: string } | { reset: true };
     if ('reset' in message) reset();
-    else prompt(message.text, message.speech);
+    else prompt(message.text, message.speech, message.context);
   });
 });
 

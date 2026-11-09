@@ -1,3 +1,4 @@
+import type { Vec3 } from './xr/paint-log';
 /// <reference lib="webworker" />
 // Parses IFC off the main thread: a stalled frame in a headset is physically unpleasant.
 import { BufferAttribute, BufferGeometry, Matrix3, Matrix4, Vector3 } from 'three';
@@ -388,7 +389,8 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
     if (!out) return { min: b.min.clone(), max: b.max.clone() };
     out.min.min(b.min); out.max.max(b.max); return out;
   }, null);
-  const geometryUnit = metresPerModelUnit();
+  // Tessellated geometry is already in metres; only IFC attribute values are in model units.
+  const attributeUnit = metresPerModelUnit();
   semanticFacts = new Map([...allBounds].map(([id, b]) => {
     const line = api.GetLine(modelID, id);
     const dx = b.max.x - b.min.x;
@@ -404,11 +406,11 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
     const fact: SemanticFact = {
       id, globalId: text(line.GlobalId), ifcClass: api.GetNameFromTypeCode(api.GetLineType(modelID, id)), name: text(line.Name),
       storey: storeyNames.get(owners.get(id) ?? -1) ?? null,
-      min: [b.min.x * geometryUnit, b.min.y * geometryUnit, b.min.z * geometryUnit],
-      max: [b.max.x * geometryUnit, b.max.y * geometryUnit, b.max.z * geometryUnit],
-      width: Number(line.OverallWidth?.value ?? Math.min(dx, dz)) * geometryUnit,
-      height: Number(line.OverallHeight?.value ?? dy) * geometryUnit,
-      length: Math.max(dx, dz) * geometryUnit, exterior,
+      min: [b.min.x, b.min.y, b.min.z],
+      max: [b.max.x, b.max.y, b.max.z],
+      width: line.OverallWidth?.value != null ? Number(line.OverallWidth.value) * attributeUnit : Math.min(dx, dz),
+      height: line.OverallHeight?.value != null ? Number(line.OverallHeight.value) * attributeUnit : dy,
+      length: Math.max(dx, dz), exterior,
       exteriorSource: 'geometry', facing: exterior ? distances[0][0] : null, facingSource: exterior ? 'geometry' : null,
     };
     return [id, fact];
@@ -565,10 +567,40 @@ function elementRelations(id: number) {
   };
 }
 
+const PAINT_DETAILS_PER_COLOUR = 12;
+
+/** The request's scene context as compact text, in IFC world metres. Viewer geometry is Y-up metres plus the coordination shift. */
+function interactionContext({ head, forward, floor, paint }: Extract<AgentQuery, { method: 'interaction_context' }>['params']): string {
+  const shift = Array.from(api.GetCoordinationMatrix(openModel!));
+  const toIfc = ([x, y, z]: Vec3): Vec3 => [x - shift[12], shift[14] - z, y - shift[13]];
+  const num = (n: number) => String(Number(n.toFixed(2)));
+  const point = (p: Vec3) => `(${p.map(num).join(', ')})`;
+
+  const storey = floor != null ? semanticFacts.get(floor)?.storey : null;
+  const lines = [
+    '[current state, for this request only; IFC world metres, Z up]',
+    `Standing: head at ${point(toIfc(head))}${storey ? `, storey ${storey}` : ''}, facing (${num(forward[0])}, ${num(-forward[2])})`,
+  ];
+  const colours = paint.flatMap(({ color, elements }) => {
+    const known = elements.filter(({ id }) => semanticFacts.has(id));
+    if (!known.length) return [];
+    return [`${color}: ${known.map(({ id, dots, center, min, max }, index) => {
+      const fact = semanticFacts.get(id)!;
+      if (index >= PAINT_DETAILS_PER_COLOUR) return `#${id} ${fact.ifcClass} ×${dots}`;
+      const [a, b] = [toIfc(min), toIfc(max)];
+      const size = a.map((n, axis) => num(Math.abs(b[axis] - n))).join('×');
+      return `#${id} ${fact.ifcClass}${fact.name ? ` "${fact.name}"` : ''} centre ${point(toIfc(center))} size ${size} dots ${dots}`;
+    }).join('; ')}`];
+  });
+  if (colours.length) lines.push('Paint:', ...colours);
+  return lines.join('\n');
+}
+
 async function queryAgent(query: AgentQuery): Promise<unknown> {
   if (query.method === 'kit_help') return kitHelp(query.params.topic, reportProgress);
   const current = requireDocument();
   if (openModel == null) throw new ModelUnavailable();
+  if (query.method === 'interaction_context') return interactionContext(query.params);
   if (query.method === 'inspect_with_script') {
     const { output, timing } = await runScript(api.SaveModel(openModel!), query.params.code, query.params.values, false, indexKey(), reportProgress);
     return { ok: true, output, committed: false, timing };

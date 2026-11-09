@@ -7,13 +7,15 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { Fade } from './fade';
 import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
-import { Hold } from './hold';
+import { Hold, TapHold } from './hold';
 import { HoldRing } from './hold-ring';
 import { Hud } from './hud';
 import { navReach, spawnLanding, storeyLandings } from './landing';
 import { Notice } from './notice';
+import { PALETTE, type Stroke, type Vec3 } from './paint-log';
 import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, upperFaceButtonDown, type Pointer } from './pointer';
 import { Spawn, type Spot } from './spawn';
+import { Spray } from './spray';
 import { Station } from './station';
 import { Walking } from './walking';
 
@@ -25,15 +27,19 @@ function pointerVisual() {
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.0015, 0.0015, 0.25, 6).rotateX(Math.PI / 2), material);
   beam.position.z = -0.125;
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 10, 8), material);
+  // Its own material: the tip shows the colour the next stroke will get.
+  const tipMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 10, 8), tipMaterial);
   const group = new THREE.Group();
   group.add(beam, tip);
-  return group;
+  return { group, tipMaterial };
 }
 
 const head = new THREE.Vector3();
 const pivot = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
+const DOWN = new THREE.Vector3(0, -1, 0);
+const MAX_FLOOR_SEARCH = 50;
 const feet = new THREE.Vector3();
 const direction = new THREE.Vector3();
 const controllerModels = new XRControllerModelFactory();
@@ -45,6 +51,11 @@ const SNAP_RELEASE = 0.3;
 const AIM_PRESS = 0.7;
 const AIM_RELEASE = 0.25;
 const RETURN_HOLD_MS = 800;
+const SPRAY_INTERVAL_MS = 50;
+const SPRAY_JITTER = Math.tan(THREE.MathUtils.degToRad(1.5));
+/** Taps shouldn't flash the ring. */
+const PAINT_RING_DELAY = 150 / RETURN_HOLD_MS;
+const NO_COLOUR_TIP = 0x808080;
 
 export class XRWalk {
   readonly rig = new THREE.Group();
@@ -71,6 +82,12 @@ export class XRWalk {
   private snapped = new WeakSet<Pointer>();
   private returnHold = new Hold(RETURN_HOLD_MS);
   private returnRing: HoldRing;
+  readonly spray: Spray;
+  private spraying = new Map<Pointer, { stroke: Stroke; next: number }>();
+  private paintButton = new TapHold(RETURN_HOLD_MS);
+  private tips: THREE.MeshBasicMaterial[] = [];
+  /** What a ray hits in the current model. */
+  pickAt: ((ray: THREE.Ray) => { point: THREE.Vector3; normal: THREE.Vector3; expressID: number } | null) | null = null;
   /** The camera only carries the headset's pose once a frame has been rendered in the session. */
   private sessionFrames = 0;
   private previous = performance.now();
@@ -87,6 +104,7 @@ export class XRWalk {
 
     this.fade = new Fade(camera, !Hud.enabled());
     this.returnRing = new HoldRing(camera);
+    this.spray = new Spray(scene);
     this.walking = new Walking(this.rig, camera, this.fade);
     const floorY = () => this.walking.floorY;
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
@@ -114,7 +132,8 @@ export class XRWalk {
     const ray = this.renderer.xr.getController(index) as unknown as THREE.Group;
     const grip = this.renderer.xr.getControllerGrip(index) as unknown as THREE.Group;
     this.rig.add(ray, grip);
-    const visual = pointerVisual();
+    const { group: visual, tipMaterial } = pointerVisual();
+    this.tips.push(tipMaterial);
     visual.visible = false;
     ray.add(visual);
 
@@ -134,22 +153,95 @@ export class XRWalk {
     events.addEventListener('disconnected', () => {
       this.station.grabEnd(index);
       this.station.pressEnd(index);
+      this.stopSpray(pointer);
       pointer.source = null;
       visual.visible = false;
     });
     events.addEventListener('selectstart', () => this.press(pointer));
     events.addEventListener('selectend', () => {
       this.station.pressEnd(index);
+      this.stopSpray(pointer);
       if (pointer.source?.hand) this.station.grabEnd(index);
     });
     events.addEventListener('squeezestart', () => this.station.grabStart(index, this.grabPosition(pointer)));
     events.addEventListener('squeezeend', () => this.station.grabEnd(index));
   }
 
+  /** The right controller's trigger sprays; everything else presses panels. */
+  private sprays(pointer: Pointer) {
+    return !pointer.source?.hand && pointer.source?.targetRayMode === 'tracked-pointer' && handOf(pointer) === 'right';
+  }
+
   private press(pointer: Pointer) {
+    if (this.sprays(pointer)) return this.startSpray(pointer);
     const ray = pointerRay(pointer, new THREE.Ray());
     if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return;
     if (!this.notice.press(ray)) this.station.press(ray, pointer.index);
+  }
+
+  private startSpray(pointer: Pointer) {
+    if (this.locked) return;
+    const now = performance.now();
+    const stroke = this.spray.log.beginStroke(now);
+    if (stroke) this.spraying.set(pointer, { stroke, next: now });
+    else this.notify('No colours left: undo or clear some paint', false);
+  }
+
+  private stopSpray(pointer: Pointer) {
+    const spraying = this.spraying.get(pointer);
+    if (!spraying) return;
+    this.spraying.delete(pointer);
+    this.spray.log.endStroke(spraying.stroke, performance.now());
+  }
+
+  private updateSpray(now: number) {
+    if (this.locked || this.teleport.aiming || this.placement.aiming) return;
+    for (const [pointer, spraying] of this.spraying) {
+      if (now < spraying.next) continue;
+      spraying.next = now + SPRAY_INTERVAL_MS;
+      const ray = pointerRay(pointer, new THREE.Ray());
+      ray.direction.x += (Math.random() - 0.5) * 2 * SPRAY_JITTER;
+      ray.direction.y += (Math.random() - 0.5) * 2 * SPRAY_JITTER;
+      ray.direction.z += (Math.random() - 0.5) * 2 * SPRAY_JITTER;
+      ray.direction.normalize();
+      const hit = this.pickAt?.(ray);
+      if (!hit) continue;
+      const normal = hit.normal.dot(ray.direction) > 0 ? hit.normal.clone().negate() : hit.normal;
+      if (!this.spray.add(spraying.stroke, hit.point.toArray() as Vec3, normal.toArray() as Vec3, hit.expressID)) {
+        this.stopSpray(pointer);
+        this.notify('Paint is full: undo or clear some', false);
+      }
+    }
+  }
+
+  /** Tints the spraying tip with the next colour. Tapping A undoes a stroke; holding it clears all paint. */
+  private updatePaint(now: number): number {
+    const { log } = this.spray;
+    const next = log.nextColor(now);
+    const tint = next == null ? NO_COLOUR_TIP : PALETTE[next].hex;
+    for (const p of this.pointers) this.tips[p.index].color.setHex(this.sprays(p) ? tint : 0xffffff);
+
+    const pointer = this.pointers.find((p) => handOf(p) === 'right' && lowerFaceButtonDown(p.source));
+    const blocked = this.locked || this.teleport.aiming || this.placement.aiming || this.spraying.size > 0 || log.dotCount === 0;
+    const { progress, tap } = this.paintButton.update(pointer != null, now, blocked);
+    if (progress === 1) {
+      this.spray.clear();
+      pulse(pointer?.source ?? null);
+    }
+    if (tap) this.spray.undo(now);
+    return progress < PAINT_RING_DELAY ? 0 : progress;
+  }
+
+  /** Where the user is, for the agent; null outside VR. */
+  interactionPose() {
+    if (!this.presenting || !this.model) return null;
+    this.camera.getWorldPosition(head);
+    this.camera.getWorldDirection(direction);
+    return {
+      head: head.toArray() as Vec3,
+      forward: direction.toArray() as Vec3,
+      floor: this.model.collision.raycastFloor(new THREE.Ray(head.clone(), DOWN), MAX_FLOOR_SEARCH)?.expressID ?? null,
+    };
   }
 
   private grabPosition(pointer: Pointer) {
@@ -202,6 +294,8 @@ export class XRWalk {
     const { camera, desktop } = this;
     if (this.talking) this.onTalk?.(null);
     this.talking = false;
+    this.spraying.clear();
+    this.spray.clear();
     this.fade.reset();
     this.teleport.cancel();
     this.placement.cancel();
@@ -304,12 +398,12 @@ export class XRWalk {
   }
 
   /** Holding X on the left controller goes back to the start; aiming or travelling takes priority. */
-  private updateReturnHold(now: number) {
+  private updateReturnHold(now: number): number {
     const pointer = this.pointers.find((p) => handOf(p) === 'left' && lowerFaceButtonDown(p.source));
     const blocked = this.locked || this.teleport.aiming || this.placement.aiming;
     const progress = this.returnHold.update(pointer != null, now, blocked);
-    this.returnRing.set(progress);
     if (progress === 1) void this.jump(() => this.returnToSpawn(), pointer);
+    return progress;
   }
 
   /** An edit since the start may have put a wall on the spot or removed its floor. */
@@ -376,6 +470,7 @@ export class XRWalk {
       this.rig.position.add(shift);
       this.spawn.translate(shift);
       this.station.translate(shift);
+      this.spray.translate(shift);
       this.walking.resetTracking(this.rig.position.y);
       this.walking.lastValid?.add(shift);
     }
@@ -489,10 +584,11 @@ export class XRWalk {
     this.updateStickAims();
     this.teleport.update();
     this.placement.update();
-    this.updateReturnHold(now);
+    this.returnRing.set(Math.max(this.updateReturnHold(now), this.updatePaint(now)));
+    this.updateSpray(now);
     this.updateTalk();
     this.updateSnapTurn();
-    const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
+    const rays = this.pointers.filter((p) => p.source && p.ray.visible && !this.sprays(p)).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
     this.camera.getWorldPosition(head);
     this.camera.getWorldDirection(direction);
     this.station.update({

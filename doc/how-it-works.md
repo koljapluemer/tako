@@ -37,6 +37,11 @@ tessellates the whole model. The Python worker keeps the last index built by a
 read-only script, keyed by project and latest command, so later scripts on the
 same model state reuse it. It keeps no copy of the model itself.
 
+In VR, each request carries a compact state block: where the user stands, and
+any spray paint summarised by colour and element (centre, size, dot count), in
+IFC world metres. Paint is session-only, lives in the viewer, and is dropped
+when an edit touches what it marks.
+
 Agent sessions from the headset are traced; see `agent-tracing.md`.
 
 All agent-facing lengths are metres. IFC unit conversion happens at the worker

@@ -295,6 +295,12 @@ def free_intervals(f, wall, sill: float, height: float, margin: float = 0.1) -> 
     return free
 
 
+def local_point(f, element, world_xyz) -> tuple[float, float, float]:
+    """A world point (metres, Z up) in `element`'s own placement frame, in metres."""
+    x, y, z, _ = np.linalg.inv(local_matrix(f, element)) @ np.array([*world_xyz, 1.0])
+    return float(x), float(y), float(z)
+
+
 def best_along(f, wall, width: float, sill: float, height: float) -> float:
     """Centre of the widest free stretch that fits `width`."""
     fits = [(b - a, (a + b) / 2) for a, b in free_intervals(f, wall, sill, height) if b - a >= width]

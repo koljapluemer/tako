@@ -144,6 +144,9 @@ function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boo
       if (refocus) selectionMarker.visible = false;
       if (refocus && !xr.presenting) frameObject(model.group);
       if (change && change.changed.length) highlight(model.group, change.changed);
+      // Paint on anything an edit touched is stale; undo, revision jumps and new buildings make all of it stale.
+      if (change) xr.spray.dropColorsTouching(change.changed);
+      else xr.spray.clear();
       const summary = change && change.summary.length > 140 ? `${change.summary.slice(0, 140)}…` : change?.summary;
       const label = change && change.rev > 0 ? `rev ${change.rev}: ${summary}` : `${document.name}: ${model.group.children.length} draw groups`;
       setStatus(model.collision.hasFloor ? label : `${label}. No floor-class elements: VR relies on generated walkable areas`);
@@ -183,8 +186,8 @@ function pickAlong(ray: THREE.Ray, model: LoadedModel) {
   pickRay.ray.copy(ray);
   pickRay.far = hit ? hit.distance : camera.far;
   const door = pickRay.intersectObjects(model.doors.map((d) => d.mesh), false)[0];
-  if (door) return { point: door.point, expressID: door.object.userData.expressID as number };
-  return hit && { point: hit.point, expressID: hit.expressID };
+  if (door) return { point: door.point, normal: door.face!.normal.clone(), expressID: door.object.userData.expressID as number };
+  return hit && { point: hit.point, normal: hit.normal, expressID: hit.expressID };
 }
 
 async function select(event: PointerEvent) {
@@ -352,9 +355,15 @@ agentWindow.__takoAgentDisconnect = () => {
   vrAgent.disconnect();
 };
 
+xr.pickAt = (ray) => (current ? pickAlong(ray, current) : null);
+
 const voice = new VoiceAgent((text, busy) => {
   setStatus(text);
   xr.notify(text, busy);
+}, async () => {
+  const pose = xr.interactionPose();
+  if (!pose) return undefined;
+  return await queryDocument({ method: 'interaction_context', params: { ...pose, paint: xr.spray.log.summary() } }) as string;
 });
 xr.onTalk = (ray) => {
   if (!ray) return voice.stopRecording();
@@ -369,5 +378,5 @@ xr.onTalk = (ray) => {
 
 if (import.meta.env.DEV) {
   // Test hook: lets browser automation read renderer stats and drive the session.
-  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call, voice } });
+  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call, voice, spray: xr.spray } });
 }

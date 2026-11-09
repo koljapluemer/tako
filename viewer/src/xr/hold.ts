@@ -34,3 +34,25 @@ export class Hold {
     this.state = { phase: 'idle' };
   }
 }
+
+/** One button, two actions: a long press like `Hold`, and a tap when it comes up early. */
+export class TapHold {
+  private hold: Hold;
+  private down = false;
+  /** This press completed or was blocked at some point, so its release is not a tap. */
+  private spent = false;
+
+  constructor(ms: number) {
+    this.hold = new Hold(ms);
+  }
+
+  /** Call every frame. `progress` is as in `Hold`; `tap` is true on the one frame a tap ends. */
+  update(pressed: boolean, now: number, blocked = false): { progress: number; tap: boolean } {
+    const progress = this.hold.update(pressed, now, blocked);
+    if (pressed && (blocked || progress === 1)) this.spent = true;
+    const tap = this.down && !pressed && !this.spent;
+    if (!pressed) this.spent = false;
+    this.down = pressed;
+    return { progress, tap };
+  }
+}

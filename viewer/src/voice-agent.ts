@@ -13,7 +13,11 @@ export class VoiceAgent {
   private recorder: MediaRecorder | null = null;
   private startedAt = 0;
 
-  constructor(private show: (text: string, busy: boolean) => void) {
+  constructor(
+    private show: (text: string, busy: boolean) => void,
+    /** What the user is doing in the scene, for the agent to read alongside the request. */
+    private context: () => Promise<string | undefined> = async () => undefined,
+  ) {
     this.connect();
   }
 
@@ -77,7 +81,7 @@ export class VoiceAgent {
       const response = await fetch('/api/transcribe', { method: 'POST', body: audio, headers: { 'content-type': audio.type } });
       if (!response.ok) return this.show(response.status === 429 ? 'Voice limit reached, try later' : 'Speech service failed', false);
       const { text } = await response.json() as { text: string };
-      if (text.trim()) this.sendText(text.trim(), { record_ms: recordMs, transcribe_ms: Math.round(performance.now() - started) });
+      if (text.trim()) void this.sendText(text.trim(), { record_ms: recordMs, transcribe_ms: Math.round(performance.now() - started) });
       else this.show('I did not catch that', false);
     } catch {
       this.show('Speech service unreachable', false);
@@ -91,7 +95,11 @@ export class VoiceAgent {
   }
 
   /** Same path as speech, minus the microphone. */
-  sendText(text: string, speech?: { record_ms: number; transcribe_ms: number }) {
-    this.socket?.send(JSON.stringify({ text, speech }));
+  async sendText(text: string, speech?: { record_ms: number; transcribe_ms: number }) {
+    const context = await this.context().catch((error) => {
+      console.warn('no interaction context', error);
+      return undefined;
+    });
+    this.socket?.send(JSON.stringify({ text, speech, context }));
   }
 }
