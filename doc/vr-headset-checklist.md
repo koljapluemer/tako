@@ -5,19 +5,18 @@ the provisional constants named below.
 
 ## Setup
 
-1. `just corpus` builds the test models in `viewer/.corpus/` (not committed).
-2. `just vr` serves over HTTPS on the LAN. Open `https://<lan-ip>:5173/?hud=1` in
+1. `just vr` serves over HTTPS on the LAN. Open `https://<lan-ip>:5173/?hud=1` in
    Quest Browser and accept the certificate warning.
-3. Corpus models appear in the building list with the prefix `Corpus:`.
-4. The readout shows frame time, draw calls, triangles, heap and disk use.
+2. The readout shows frame time, draw calls, triangles, heap and disk use.
 
 ## Budgets (step 1)
 
 | Model | Frame avg / worst (ms) | Draw calls | Triangles | Heap | Disk | Load time |
 |---|---|---|---|---|---|---|
-| corpus: synthetic/no-spaces | | | | | | |
-| corpus: synthetic/large | | | | | | |
-| corpus: real/s-office-archi | | | | | | |
+| AC20 Institute | | | | | | |
+| S Office | | | | | | |
+| Simple building (IFC 2x3) | | | | | | |
+| Duplex (IFC 2x3) | | | | | | |
 
 Agreed budget: _not measured yet_.
 
@@ -25,25 +24,26 @@ Also record the storage quota Quest Browser reports (open question in the plan).
 
 ## Acceptance, per step
 
-Provisional constants live next to the code that uses them. Tune them only
-against results across the corpus, never the bundled samples alone.
+Provisional constants live next to the code that uses them. The headset can only
+open the selectable buildings, so don't tune analysis constants to them alone:
+check those against the corpus tests too (`just corpus`, then `npm test` in `viewer/`).
 
 ### Rendering
-- [ ] Large corpus models hold frame rate. Tune `CELL_SIZE_XZ` and `CELL_SIZE_Y` (`viewer/src/render-cells.ts`).
+- [ ] The largest building holds frame rate. Tune `CELL_SIZE_XZ` and `CELL_SIZE_Y` (`viewer/src/render-cells.ts`).
 - [ ] Doors don't visibly pop when walking towards them.
 
 ### Walkability
-- [ ] Note how long navmesh generation takes on `synthetic/large` and how heavy Recast feels on the headset.
+- [ ] Note how long navmesh generation takes on the largest building and how heavy Recast feels on the headset.
 - [ ] Unreachable spots show a red teleport arc; reachable spots are accepted.
 - [ ] Walking through a railing or low furniture dims the view and shows the hint.
 - [ ] Stairs are walkable. If not, tune `AGENT_CLIMB` (`viewer/src/nav/navmesh.ts`).
 
 ### Navigation points
-- [ ] Points feel evenly spread and sensibly named across the corpus, including `synthetic/no-spaces`.
+- [ ] Points feel evenly spread and sensibly named across the buildings.
 - [ ] Arriving at a point faces into the space.
 
 ### Versions
-Needs a local project with at least two revisions on the headset.
+Needs a building with at least two revisions on the headset.
 - [ ] A/B switching keeps position and feels immediate.
 - [ ] `MAX_CACHED_MODELS` and `MAX_CACHED_BYTES` (`viewer/src/versions.ts`) don't exhaust memory.
 
@@ -53,8 +53,8 @@ Needs a local project with at least two revisions on the headset.
 - [ ] Controller and hand models appear (they download from the WebXR profiles CDN).
 - [ ] The Opacity slider tracks the ray, keeps dragging past the panel edge, and reaches both ends. Opacity 0 and 1 both look right.
 - [ ] Nav points off hides the pins and they can't be pressed or hovered.
-- [ ] Frame rate holds with the station open on the largest corpus model: the mini model repeats the building's draw calls.
-- [ ] At zoom 1, the panel doesn't touch the model, cards or buttons, across tall and many-level corpus models. Tune `MAX_HEIGHT` (`viewer/src/xr/mini-view.ts`) and `CONTROLS_ANGLE` and `CONTROLS_HEIGHT` (`viewer/src/xr/station.ts`).
+- [ ] Frame rate holds with the station open on the largest building: the mini model repeats the building's draw calls.
+- [ ] At zoom 1, the panel doesn't touch the model, cards or buttons, across the buildings. Tune `MAX_HEIGHT` (`viewer/src/xr/mini-view.ts`) and `CONTROLS_ANGLE` and `CONTROLS_HEIGHT` (`viewer/src/xr/station.ts`).
 
 ### Station
 - [ ] Left stick forward aims a straight ray that places the station on valid floor and refuses anything else; a new one replaces the old.

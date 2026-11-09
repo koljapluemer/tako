@@ -45,7 +45,7 @@ vr-agent: setup
     adb reverse tcp:47833 tcp:47833
     node --env-file=deploy/.env bridge/dist/vr-agent.js
 
-# Run the agent benchmark against a running `just vr-agent`, with a throwaway project open in the viewer (see doc/agent-tracing.md)
+# Run the agent benchmark against a running `just vr-agent`, with a building whose revisions you can spare open in the viewer (see doc/agent-tracing.md)
 benchmark: setup
     node bridge/dist/benchmark.js
 
@@ -53,19 +53,7 @@ benchmark: setup
 trace-report file="": setup
     node bridge/dist/trace-report.js {{file}}
 
-# Download the external test models into viewer/public/samples/external (skips existing files)
-fetch-models:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir=viewer/public/samples/external
-    mkdir -p "$dir"
-    bsi="https://raw.githubusercontent.com/buildingSMART/Sample-Test-Files/main"
-    fetch() { [ -s "$dir/$1" ] || { echo "downloading $1"; curl -sfL "$2" -o "$dir/$1"; }; }
-    fetch bsi-arch-ifc2x3.ifc "$bsi/IFC%202.3.0.1%20(IFC%202x3%20TC1)/Simple-Scene/Building-Architecture.ifc"
-    fetch bsi-arch-ifc4x3.ifc "$bsi/IFC%204.3.2.0%20(IFC%204.3%20ADD2)/Simple-Scene/Building-Architecture.ifc"
-    fetch s-office-archi.ifc "https://raw.githubusercontent.com/ThatOpen/engine_web-ifc/main/tests/ifcfiles/public/S_Office_Integrated%20Design%20Archi.ifc"
-
-# Build the gitignored VR test corpus in viewer/.corpus: synthetic edge cases plus openly licensed real models
+# Build the gitignored test corpus in viewer/.corpus for the navigation tests: synthetic edge cases plus openly licensed real models
 corpus: setup
     #!/usr/bin/env bash
     set -euo pipefail

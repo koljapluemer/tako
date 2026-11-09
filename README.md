@@ -12,9 +12,9 @@ Requires Node 22+, [just](https://github.com/casey/just), and the `claude` CLI.
 just up
 ```
 
-Open `http://localhost:5173`, import an IFC file, then use Claude. Projects and
-their revisions stay in that browser profile. Export the IFC to make an ordinary
-file backup.
+Open `http://localhost:5173`, pick a building, then use Claude. Each building's
+revisions stay in that browser profile. Export the IFC to make an ordinary file
+backup.
 
 For a standalone headset on the same LAN:
 

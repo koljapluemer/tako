@@ -7,7 +7,7 @@ import {
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
 import { VoiceAgent } from './voice-agent';
-import { addCorpusSamples, fetchSample, sampleFileName, SAMPLES, type Sample } from './samples';
+import { fetchSample, SAMPLES, type Sample } from './samples';
 import { ModelCache, type VersionSource } from './versions';
 import { XRWalk } from './xr/session';
 
@@ -210,27 +210,18 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   pressedAt = null;
 });
 
-// --- local projects ---------------------------------------------------------
+// --- buildings --------------------------------------------------------------
 const picker = document.getElementById('model') as HTMLSelectElement;
-const importButton = document.getElementById('import') as HTMLButtonElement;
 const exportButton = document.getElementById('export') as HTMLButtonElement;
 const undoButton = document.getElementById('undo') as HTMLButtonElement;
 const redoButton = document.getElementById('redo') as HTMLButtonElement;
-const fileInput = document.getElementById('ifc-file') as HTMLInputElement;
-const SAMPLE_PREFIX = 'sample:';
 
 async function refreshPicker() {
   const projects = await listProjects();
-  picker.replaceChildren(
-    ...projects.map((p) => new Option(`${p.name} · rev ${p.revision}`, p.id, false, p.id === activeDocument?.id)),
-  );
-  // An opened sample is a local project from then on, listed above with its edits.
-  const unopened = SAMPLES.filter((s) => !projects.some((p) => p.name === sampleFileName(s)));
-  if (unopened.length) {
-    const group = Object.assign(document.createElement('optgroup'), { label: 'Samples' });
-    group.append(...unopened.map((s) => new Option(s.name, SAMPLE_PREFIX + s.path)));
-    picker.append(group);
-  }
+  picker.replaceChildren(...SAMPLES.map((s) => {
+    const revision = projects.find((p) => p.id === s.file)?.revision;
+    return new Option(revision ? `${s.name} · rev ${revision}` : s.name, s.file, false, s.file === activeDocument?.id);
+  }));
   return projects;
 }
 
@@ -242,8 +233,8 @@ async function openSample(sample: Sample) {
   picker.disabled = true;
   xr.notify(`Loading ${sample.name}…`, true);
   const opened = (async () => {
-    const existing = (await listProjects()).find((p) => p.name === sampleFileName(sample));
-    if (existing) return openProject(existing.id, [], setStatus);
+    const stored = (await listProjects()).some((p) => p.id === sample.file);
+    if (stored) return openProject(sample.file, [], setStatus);
     return importProject(await fetchSample(sample, setStatus), setStatus);
   })();
   show(opened, null, true);
@@ -257,27 +248,9 @@ async function openSample(sample: Sample) {
 
 xr.setSamples(SAMPLES, (sample) => void openSample(sample));
 
-picker.addEventListener('change', async () => {
-  if (picker.value.startsWith(SAMPLE_PREFIX)) {
-    const sample = SAMPLES.find((s) => SAMPLE_PREFIX + s.path === picker.value);
-    if (sample) await openSample(sample);
-    return;
-  }
-  picker.disabled = true;
-  show(openProject(picker.value, [], setStatus), null, true);
-  await loading;
-  picker.disabled = false;
-});
-
-importButton.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  show(importProject(file, setStatus), null, true);
-  await loading;
-  await refreshPicker();
-  if (activeDocument) picker.value = activeDocument.id;
-  fileInput.value = '';
+picker.addEventListener('change', () => {
+  const sample = SAMPLES.find((s) => s.file === picker.value);
+  if (sample) void openSample(sample);
 });
 
 exportButton.addEventListener('click', async () => {
@@ -339,12 +312,9 @@ undoButton.addEventListener('click', () => void historyAction('undo'));
 redoButton.addEventListener('click', () => void historyAction('redo'));
 
 refreshPicker().then((projects) => {
-  if (projects[0]) {
-    picker.value = projects[0].id;
-    show(openProject(projects[0].id, [], setStatus), null, true);
-  } else {
-    void openSample(SAMPLES[0]);
-  }
+  const latest = SAMPLES.find((s) => s.file === projects[0]?.id) ?? SAMPLES[0];
+  picker.value = latest.file;
+  void openSample(latest);
 });
 
 const agentWindow = window as Window & { __takoAgentDisconnect?: () => void };
@@ -398,7 +368,6 @@ xr.onTalk = (ray) => {
 };
 
 if (import.meta.env.DEV) {
-  void addCorpusSamples().then(refreshPicker).catch(console.warn);
   // Test hook: lets browser automation read renderer stats and drive the session.
   Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call, voice } });
 }

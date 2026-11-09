@@ -43,7 +43,7 @@ entity count change per IFC class, checked against what the edit really did.
 1. Start `just viewer`, then the agent with
    `node --env-file=deploy/.env bridge/dist/vr-agent.js`. (`just vr-agent` also
    runs `adb reverse`, which fails without a connected headset.)
-2. Open a throwaway project in the viewer. The cases really edit it.
+2. Open a building whose revisions you can spare. The cases really edit it.
 3. Run `just benchmark`, then `just trace-report`.
 
 Claude restarts before each case, so cases don't share context. The benchmark

@@ -13,7 +13,7 @@ import {
 import { openingsFreedBy, type Filling } from './delete-targets';
 import { classify, isDoor, isFurniture, isSlab, isStair } from './ifc-classes';
 import {
-  commitProject, exportProject, importProject, listProjects, loadRevision, openProject, saveFocus,
+  commitProject, importProject, listProjects, loadRevision, openProject, saveFocus, saveManifest,
   type HistoryEntry, type ProjectManifest,
 } from './project-store';
 import { kitHelp, runScript } from './python/client';
@@ -1004,7 +1004,7 @@ function revisions(): RevisionInfo[] {
   return [
     { revision: 0, title: 'Original', createdAt: null, current: current.cursor === 0 },
     ...history.map((entry, i) => ({
-      revision: i + 1, title: entry.title ?? entry.summary, createdAt: entry.createdAt ?? null, current: current.cursor === i + 1,
+      revision: i + 1, title: entry.title ?? entry.summary, createdAt: entry.createdAt, current: current.cursor === i + 1,
     })),
   ];
 }
@@ -1015,7 +1015,7 @@ async function moveToRevision(current: ProjectManifest, target: number, parse: b
   current.cursor = target;
   current.updatedAt = new Date().toISOString();
   const opened = parse ? await openData(data, []) : null;
-  await commitProject(current, history, data);
+  await saveManifest(current);
   return { data, opened };
 }
 
@@ -1072,7 +1072,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         post({ type: 'selected', id: request.id });
       } else if (request.type === 'exportProject') {
         const current = requireDocument();
-        const data = await exportProject(current.id);
+        const data = await loadRevision(current.id, current.cursor);
         post({ type: 'exported', id: request.id, name: current.name, data: data.buffer as ArrayBuffer }, [data.buffer as ArrayBuffer]);
       } else if (request.type === 'execute') {
         requireDocument(request.documentId, request.baseRevision);
