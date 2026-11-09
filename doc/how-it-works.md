@@ -37,7 +37,7 @@ Parsing and geometry generation remain off the UI thread. Successful edits
 currently rebuild the complete render/collision result and swap it into the
 scene, preserving the XR session position.
 
-Standalone WebXR supports viewing, walking, teleporting and inspecting local
+Standalone WebXR supports viewing, walking and teleporting through local
 projects. The developer’s desktop browser is the authoritative agentic session
 for this proof of concept.
 

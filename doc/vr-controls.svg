@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 740" width="1120" height="740" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">tako VR controls on Meta Quest controllers</title>
-  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap inspects or presses. Grip grabs the mini model. The left thumbstick and the X, Y, A and B buttons are unused.</desc>
+  <desc id="desc">The right trigger held aims a teleport, and the right thumbstick chooses the landing direction while aiming or snap turns 30 degrees otherwise. The left trigger held aims a straight ray that places the mini model and revision cards on the floor. A trigger tap presses a panel. Grip grabs the mini model. The left thumbstick and the X, Y, A and B buttons are unused.</desc>
   <defs>
     <g id="controller">
       <!-- Trigger, behind the body; its colour comes from the use element -->
@@ -70,7 +70,7 @@
   <g font-size="14" fill="#44403c">
     <text x="396" y="279"><tspan font-weight="600">Hold:</tspan> aim with a curved beam</text>
     <text x="396" y="300"><tspan font-weight="600">Release:</tspan> teleport there</text>
-    <text x="396" y="321"><tspan font-weight="600">Tap:</tspan> inspect an element, or press a panel</text>
+    <text x="396" y="321"><tspan font-weight="600">Tap:</tspan> press a panel</text>
   </g>
 
   <!-- Left trigger -->
@@ -80,7 +80,7 @@
   <g font-size="14" fill="#44403c">
     <text x="396" y="399"><tspan font-weight="600">Hold:</tspan> aim at the floor with a straight beam</text>
     <text x="396" y="420"><tspan font-weight="600">Release:</tspan> place them there, replacing any old one</text>
-    <text x="396" y="441"><tspan font-weight="600">Tap:</tspan> inspect an element, or press a panel</text>
+    <text x="396" y="441"><tspan font-weight="600">Tap:</tspan> press a panel</text>
   </g>
 
   <!-- Grip -->

@@ -13,15 +13,14 @@ export interface Aim {
 type Press = { at: number; claimed: boolean; aim: Aim | null };
 
 /**
- * Decides what a trigger press means. UI gets first refusal; otherwise a short
- * press is a tap and a long one starts that hand's aim.
+ * Decides what a trigger press means. UI gets first refusal; otherwise a held
+ * press starts that hand's aim and a short one does nothing.
  */
 export class TriggerRouter {
   private presses = new Map<Pointer, Press>();
   /** Set while the user is being moved. */
   locked = false;
   claim: (pointer: Pointer) => boolean = () => false;
-  tap: (pointer: Pointer) => void = () => {};
 
   constructor(private aims: Record<Hand, Aim>) {}
 
@@ -33,8 +32,7 @@ export class TriggerRouter {
     const press = this.presses.get(pointer);
     if (!press) return;
     this.presses.delete(pointer);
-    if (press.aim) return press.aim.release(pointer);
-    if (!press.claimed && !this.locked && !this.anyAiming()) this.tap(pointer);
+    press.aim?.release(pointer);
   }
 
   disconnected(pointer: Pointer) {
@@ -49,9 +47,5 @@ export class TriggerRouter {
       press.aim = this.aims[handOf(pointer)];
       press.aim.begin(pointer);
     }
-  }
-
-  private anyAiming() {
-    return this.aims.left.aiming || this.aims.right.aiming;
   }
 }

@@ -12,9 +12,7 @@ function setup() {
   const left = stubAim();
   const right = stubAim();
   const router = new TriggerRouter({ left, right });
-  const tap = vi.fn();
-  router.tap = tap;
-  return { left, right, router, tap };
+  return { left, right, router };
 }
 
 describe('TriggerRouter', () => {
@@ -44,25 +42,23 @@ describe('TriggerRouter', () => {
     expect(right.begin).toHaveBeenCalledOnce();
   });
 
-  it('treats a short press as a tap', () => {
-    const { left, right, router, tap } = setup();
+  it('does not aim on a short press', () => {
+    const { left, right, router } = setup();
     const pointer = pointerOn('left');
     router.down(pointer, 0);
     router.update(100);
     router.up(pointer);
-    expect(tap).toHaveBeenCalledWith(pointer);
     expect(left.begin).not.toHaveBeenCalled();
     expect(right.begin).not.toHaveBeenCalled();
   });
 
-  it('never aims or taps on a press the UI claimed', () => {
-    const { right, router, tap } = setup();
+  it('never aims on a press the UI claimed', () => {
+    const { right, router } = setup();
     router.claim = () => true;
     const pointer = pointerOn('right');
     router.down(pointer, 0);
     router.update(500);
     router.up(pointer);
     expect(right.begin).not.toHaveBeenCalled();
-    expect(tap).not.toHaveBeenCalled();
   });
 });

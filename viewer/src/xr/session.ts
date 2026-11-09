@@ -8,7 +8,6 @@ import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.
 import { Fade } from './fade';
 import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
 import { Hud } from './hud';
-import { Inspect } from './inspect';
 import { navReach, spawnLanding, storeyLandings, type Landing } from './landing';
 import { Notice } from './notice';
 import { handOf, headYaw, pointerRay, stick, type Pointer } from './pointer';
@@ -50,7 +49,6 @@ export class XRWalk {
   private placement: FloorAim;
   private trigger: TriggerRouter;
   private notice: Notice;
-  private inspect: Inspect;
   private station: Station;
   private hud: Hud | null;
   private pointers: Pointer[] = [];
@@ -80,7 +78,6 @@ export class XRWalk {
     this.placement = new FloorAim(scene, camera, floorY, { path: straightPath, facing: false, stand: false });
     this.trigger = new TriggerRouter({ right: this.teleport, left: this.placement });
     this.notice = new Notice(scene, camera);
-    this.inspect = new Inspect(scene, camera);
     this.station = new Station(scene);
     this.station.onPin = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
@@ -88,9 +85,8 @@ export class XRWalk {
     this.trigger.claim = (pointer) => {
       const ray = pointerRay(pointer, new THREE.Ray());
       if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return true;
-      return this.notice.press(ray) || this.station.press(ray) || this.inspect.press(ray);
+      return this.notice.press(ray) || this.station.press(ray);
     };
-    this.trigger.tap = (pointer) => void this.inspect.tap(pointerRay(pointer, new THREE.Ray()));
     this.teleport.commit = (destination, pointer) => void this.travel(destination, pointer);
     this.placement.commit = ({ point }) => this.station.place(point, this.camera.getWorldPosition(new THREE.Vector3()));
 
@@ -195,7 +191,6 @@ export class XRWalk {
     this.walking.restoreDoors();
     this.notice.close();
     this.station.close();
-    this.inspect.close();
     this.rig.position.set(0, 0, 0);
     this.rig.rotation.set(0, 0, 0);
     camera.position.copy(desktop.position);
@@ -269,7 +264,6 @@ export class XRWalk {
   private async travel({ point, yaw }: Destination, pointer?: Pointer) {
     if (this.trigger.locked) return;
     this.trigger.locked = true;
-    this.inspect.close();
     await this.fade.to('teleport', 1, 90);
     if (this.presenting) this.placeHead(point, yaw);
     pulse(pointer?.source ?? null);
@@ -296,7 +290,6 @@ export class XRWalk {
       aim.reach = null;
     }
     this.walking.setModel(model.collision, model.doorCells);
-    this.inspect.setModel(model.collision, model.doors);
     this.station.setCollision(model.collision);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
     this.spawn = spawnLanding(landings);
