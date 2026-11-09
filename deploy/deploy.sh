@@ -16,21 +16,25 @@ domain=${TAKO_DOMAIN:?set TAKO_DOMAIN in deploy/.env}
 proxy_network=${PROXY_NETWORK:?set PROXY_NETWORK in deploy/.env}
 caddy_container=${CADDY_CONTAINER:?set CADDY_CONTAINER in deploy/.env}
 caddyfile=${CADDYFILE:?set CADDYFILE in deploy/.env}
+elevenlabs_key=${ELEVENLABS_API_KEY:?set ELEVENLABS_API_KEY in deploy/.env}
 remote_dir=${TAKO_REMOTE_DIR:-tako}
 
 tag=$(git rev-parse --short HEAD)
 
 echo "==> building tako-viewer:$tag from committed HEAD"
 git archive --format=tar HEAD | docker build -t "tako-viewer:$tag" -
+git archive --format=tar HEAD | docker build --target stt -t "tako-stt:$tag" -
 
 echo "==> loading image on $host"
-docker save "tako-viewer:$tag" | gzip | ssh "$host" docker load
+docker save "tako-viewer:$tag" "tako-stt:$tag" | gzip | ssh "$host" docker load
 
 echo "==> starting viewer"
 ssh "$host" "mkdir -p '$remote_dir'"
 scp -q deploy/compose.yaml "$host:$remote_dir/compose.yaml"
+# Over stdin, so the key never appears in a process list or on a command line.
+printf '%s' "$elevenlabs_key" | ssh "$host" "umask 077 && cat > '$remote_dir/elevenlabs_api_key' && chmod 600 '$remote_dir/elevenlabs_api_key'"
 ssh "$host" "cd '$remote_dir' && umask 077 &&
-  printf 'TAKO_TAG=%s\nPROXY_NETWORK=%s\n' '$tag' '$proxy_network' > .env &&
+  printf 'TAKO_TAG=%s\nPROXY_NETWORK=%s\nTAKO_UID=%s\n' '$tag' '$proxy_network' \"\$(id -u)\" > .env &&
   docker compose up -d --wait --wait-timeout 90"
 
 echo "==> ensuring Caddy routes $domain"

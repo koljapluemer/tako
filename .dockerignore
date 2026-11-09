@@ -1,5 +1,7 @@
 .git
 .env
+**/.env
+elevenlabs_api_key
 data
 models
 work

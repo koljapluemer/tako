@@ -11,7 +11,8 @@ type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => vo
 let browser: WebSocket | null = null;
 const pending = new Map<string, Pending>();
 
-const webSocketServer = new WebSocketServer({ host: '127.0.0.1', port: 47831 });
+const port = Number(process.env.TAKO_BRIDGE_PORT ?? 47831);
+const webSocketServer = new WebSocketServer({ host: '127.0.0.1', port });
 webSocketServer.on('connection', (socket, request) => {
   const origin = request.headers.origin ?? '';
   if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
@@ -127,4 +128,4 @@ tool('redo', 'Move the browser project forward one revision.', {});
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('tako MCP bridge ready on ws://127.0.0.1:47831');
+console.error(`tako MCP bridge ready on ws://127.0.0.1:${port}`);

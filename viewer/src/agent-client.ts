@@ -8,6 +8,7 @@ type Edit = OpenedDocument & { command: CommandResult };
 const queryMethods = new Set(['model_overview', 'find_elements', 'get_element', 'context_around', 'get_focus', 'list_materials', 'kit_help']);
 
 export function connectAgent(options: {
+  port: number;
   document: () => DocumentSummary | null;
   changed: (opened: OpenedDocument, summary: string, ids: number[]) => Promise<void>;
   status: (message: string) => void;
@@ -95,7 +96,7 @@ export function connectAgent(options: {
       retry = window.setTimeout(open, 500);
       return;
     }
-    socket = new WebSocket('ws://127.0.0.1:47831');
+    socket = new WebSocket(`ws://127.0.0.1:${options.port}`);
     socket.addEventListener('open', () => options.status('Claude bridge connected'));
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as ToolRequest;

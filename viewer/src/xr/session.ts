@@ -12,7 +12,7 @@ import { HoldRing } from './hold-ring';
 import { Hud } from './hud';
 import { navReach, spawnLanding, storeyLandings } from './landing';
 import { Notice } from './notice';
-import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, type Pointer } from './pointer';
+import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, upperFaceButtonDown, type Pointer } from './pointer';
 import { Spawn, type Spot } from './spawn';
 import { Station } from './station';
 import { Walking } from './walking';
@@ -54,6 +54,9 @@ export class XRWalk {
   private placement: FloorAim;
   /** Set while the user is being moved. */
   private locked = false;
+  private talking = false;
+  /** Called with the pointing ray when hold-to-talk starts, and null when it ends. */
+  onTalk: ((ray: THREE.Ray | null) => void) | null = null;
   private stickAims = new Map<Pointer, FloorAim>();
   /** Sticks that have recentred since their last push. */
   private sticksAtRest = new WeakSet<Pointer>();
@@ -197,6 +200,8 @@ export class XRWalk {
 
   private onSessionEnd() {
     const { camera, desktop } = this;
+    if (this.talking) this.onTalk?.(null);
+    this.talking = false;
     this.fade.reset();
     this.teleport.cancel();
     this.placement.cancel();
@@ -397,6 +402,14 @@ export class XRWalk {
     return new THREE.Vector3(head.x, this.walking.floorY, head.z);
   }
 
+  private updateTalk() {
+    const pressing = this.pointers.find((p) => upperFaceButtonDown(p.source));
+    if (!!pressing === this.talking) return;
+    this.talking = !!pressing;
+    if (pressing) pulse(pressing.source);
+    this.onTalk?.(pressing ? pointerRay(pressing, new THREE.Ray()) : null);
+  }
+
   private placeAtSpawn() {
     this.needsPlacement = false;
     // Here rather than in the frame loop: a model arriving during session start places the user too.
@@ -477,6 +490,7 @@ export class XRWalk {
     this.teleport.update();
     this.placement.update();
     this.updateReturnHold(now);
+    this.updateTalk();
     this.updateSnapTurn();
     const rays = this.pointers.filter((p) => p.source && p.ray.visible).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
     this.camera.getWorldPosition(head);

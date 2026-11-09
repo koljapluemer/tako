@@ -34,6 +34,13 @@ export function lowerFaceButtonDown(source: XRInputSource | null): boolean {
   return pad.buttons[4]?.pressed ?? false;
 }
 
+/** The upper face button: Y on the left controller, B on the right. */
+export function upperFaceButtonDown(source: XRInputSource | null): boolean {
+  const pad = source?.gamepad;
+  if (!pad || source!.hand || pad.mapping !== 'xr-standard') return false;
+  return pad.buttons[5]?.pressed ?? false;
+}
+
 /** Thumbstick axes; xr-standard puts them at 2/3, some older mappings at 0/1. */
 export function stick(source: XRInputSource | null): [number, number] | null {
   const pad = source?.gamepad;

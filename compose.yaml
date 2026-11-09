@@ -3,6 +3,20 @@ services:
     build: .
     restart: unless-stopped
 
+  tako-stt:
+    build:
+      context: .
+      target: stt
+    restart: unless-stopped
+    user: ${TAKO_UID:-1000}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ELEVENLABS_API_KEY_FILE: /run/secrets/elevenlabs_api_key
+    secrets:
+      - elevenlabs_api_key
+
   caddy:
     image: caddy:2.10-alpine
     environment:
@@ -18,6 +32,10 @@ services:
       viewer:
         condition: service_healthy
     restart: unless-stopped
+
+secrets:
+  elevenlabs_api_key:
+    file: ./elevenlabs_api_key
 
 volumes:
   caddy_data:

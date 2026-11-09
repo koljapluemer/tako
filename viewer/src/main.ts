@@ -6,6 +6,7 @@ import {
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
+import { VoiceAgent } from './voice-agent';
 import { addCorpusSamples, fetchSample, sampleFileName, SAMPLES, type Sample } from './samples';
 import { ModelCache, type VersionSource } from './versions';
 import { XRWalk } from './xr/session';
@@ -174,7 +175,12 @@ function pick(event: PointerEvent, model: LoadedModel) {
     -((event.clientY - rect.top) / rect.height) * 2 + 1,
   );
   pickRay.setFromCamera(pointer, camera);
-  const hit = model.collision.raycast(pickRay.ray, camera.far);
+  return pickAlong(pickRay.ray, model);
+}
+
+function pickAlong(ray: THREE.Ray, model: LoadedModel) {
+  const hit = model.collision.raycast(ray, camera.far);
+  pickRay.ray.copy(ray);
   pickRay.far = hit ? hit.distance : camera.far;
   const door = pickRay.intersectObjects(model.doors.map((d) => d.mesh), false)[0];
   if (door) return { point: door.point, expressID: door.object.userData.expressID as number };
@@ -343,7 +349,8 @@ refreshPicker().then((projects) => {
 
 const agentWindow = window as Window & { __takoAgentDisconnect?: () => void };
 agentWindow.__takoAgentDisconnect?.();
-const agent = connectAgent({
+const connect = (port: number) => connectAgent({
+  port,
   document: () => activeDocument,
   status: setStatus,
   query: queryDocument,
@@ -365,10 +372,31 @@ const agent = connectAgent({
     picker.value = opened.document.id;
   },
 });
-agentWindow.__takoAgentDisconnect = agent.disconnect;
+// 47831 is a desktop Claude session; 47833 is the VR agent's own Claude.
+const agent = connect(47831);
+const vrAgent = connect(47833);
+agentWindow.__takoAgentDisconnect = () => {
+  agent.disconnect();
+  vrAgent.disconnect();
+};
+
+const voice = new VoiceAgent((text, busy) => {
+  setStatus(text);
+  xr.notify(text, busy);
+});
+xr.onTalk = (ray) => {
+  if (!ray) return voice.stopRecording();
+  if (current) {
+    const picked = pickAlong(ray, current);
+    selectionMarker.visible = picked != null;
+    if (picked) selectionMarker.position.copy(picked.point);
+    void selectElement(picked?.expressID ?? null);
+  }
+  voice.startRecording();
+};
 
 if (import.meta.env.DEV) {
   void addCorpusSamples().then(refreshPicker).catch(console.warn);
   // Test hook: lets browser automation read renderer stats and drive the session.
-  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call } });
+  Object.assign(window, { __tako: { renderer, scene, camera, xr, current: () => current, document: () => activeDocument, tool: agent.call, voice } });
 }

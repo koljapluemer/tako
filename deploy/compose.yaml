@@ -11,8 +11,32 @@ services:
       proxy:
         aliases:
           - tako-viewer
+      backend:
+
+  stt:
+    image: tako-stt:${TAKO_TAG:?set TAKO_TAG in .env}
+    restart: unless-stopped
+    mem_limit: 64m
+    # Owns the secret file on the host, which is readable by nobody else.
+    user: ${TAKO_UID:?set TAKO_UID in .env}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ELEVENLABS_API_KEY_FILE: /run/secrets/elevenlabs_api_key
+    secrets:
+      - elevenlabs_api_key
+    networks:
+      backend:
+        aliases:
+          - tako-stt
+
+secrets:
+  elevenlabs_api_key:
+    file: ./elevenlabs_api_key
 
 networks:
+  backend:
   proxy:
     external: true
     name: ${PROXY_NETWORK:?set PROXY_NETWORK in .env}

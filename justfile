@@ -38,6 +38,13 @@ vr: setup
 chat: setup
     claude
 
+# Claude for the headset: hold B or Y in VR and speak (needs `just vr`, and a USB or wireless adb link to the Quest)
+vr-agent: setup
+    adb reverse tcp:{{port}} tcp:{{port}}
+    adb reverse tcp:47832 tcp:47832
+    adb reverse tcp:47833 tcp:47833
+    node --env-file=deploy/.env bridge/dist/vr-agent.js
+
 # Download the external test models into viewer/public/samples/external (skips existing files)
 fetch-models:
     #!/usr/bin/env bash
