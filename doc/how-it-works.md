@@ -32,10 +32,14 @@ openings, type), read from IFC relationships on demand, so resolving "this
 window" doesn't need a script. Deleting a door or window also deletes its
 opening, unless another filling still uses that opening.
 
-`run_ifcopenshell` scripts can read `si`, a spatial index whose first read
-tessellates the whole model. The Python worker keeps the last index built by a
-read-only script, keyed by project and latest command, so later scripts on the
-same model state reuse it. It keeps no copy of the model itself.
+`run_ifcopenshell` scripts can read `si`, a spatial index. Its boxes and plan
+footprints come from the viewer's own tessellation, measured when the model
+opens, so Python tessellates only elements the viewer couldn't mesh. The Python
+worker keeps the parsed model and the last index of one model state (project and
+latest command), so later scripts on that state skip serializing, parsing and
+indexing. A read-only script that changes the model gets it dropped, not rolled
+back; a committing script always drops it. Python starts when an agent connects,
+and from then on each new model state is parsed in the background.
 
 In VR, each request carries a compact state block: where the user stands, and
 any spray paint summarised by colour and element (centre, size, dot count), in

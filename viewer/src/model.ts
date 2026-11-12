@@ -82,6 +82,9 @@ function request<T extends Reply>(message: RequestPayload): Promise<T> {
 export const inspectElement = async (expressID: number) =>
   (await request<Extract<Reply, { type: 'inspected' }>>({ type: 'inspect', expressID })).info;
 
+/** An agent is connected: start Python and parse the model, so its first script doesn't wait for either. */
+export const warmScripts = async () => { await request({ type: 'warmScripts' }); };
+
 export const queryDocument = async (query: AgentQuery): Promise<unknown> =>
   (await request<Extract<Reply, { type: 'queried' }>>({ type: 'query', query })).result;
 

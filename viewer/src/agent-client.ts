@@ -32,6 +32,8 @@ export function connectAgent(options: {
   execute: (document: DocumentSummary, command: DocumentCommand, title?: string) => Promise<Edit>;
   revision: (action: 'undo' | 'redo', document: DocumentSummary) => Promise<Edit>;
   revise: (document: DocumentSummary, edit: { editId: string; values: Record<string, unknown>; replacements: TextReplacement[] }) => Promise<Edit>;
+  /** Called on each connection, to get scripted edits ready before the first one. */
+  warm: () => Promise<void>;
 }): { disconnect: () => void; call: (name: string, args: Record<string, unknown>) => Promise<unknown> } {
   let stopped = false;
   let socket: WebSocket | null = null;
@@ -128,6 +130,7 @@ export function connectAgent(options: {
     socket.addEventListener('open', () => {
       if (options.document()) options.status('Claude bridge connected');
       options.modelEvents.slice(-MODEL_EVENT_REPLAY).forEach(sendModelEvent);
+      options.warm().catch((error) => console.warn('warming scripted edits failed', error));
     });
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as ToolRequest;

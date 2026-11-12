@@ -131,6 +131,7 @@ export type WorkerRequest =
   | (RequestBase & { type: 'undo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'redo'; documentId: string; baseRevision: number })
   | (RequestBase & { type: 'navigation'; token: number })
+  | (RequestBase & { type: 'warmScripts' })
   | (RequestBase & { type: 'listRevisions' })
   /** `reuse`: the viewer still holds this revision's geometry, so don't send it again. */
   | (RequestBase & { type: 'jumpRevision'; documentId: string; baseRevision: number; target: number; reuse: boolean })
@@ -154,6 +155,7 @@ export type WorkerResponse =
   | { type: 'exported'; id: number; name: string; data: ArrayBuffer }
   | { type: 'executed'; id: number; document: DocumentSummary; command: CommandResult; result: LoadResult }
   | { type: 'navigated'; id: number; result: NavBuild }
+  | { type: 'warmed'; id: number }
   | { type: 'revisions'; id: number; revisions: RevisionInfo[] }
   | { type: 'jumped'; id: number; document: DocumentSummary; result: LoadResult | null }
   | { type: 'error'; id: number; code: string; message: string };

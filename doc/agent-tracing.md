@@ -20,8 +20,8 @@ Phases of a `tool` event, in milliseconds:
 | `persist_ms` | Saving the revision to OPFS |
 | `render_ms` | Rebuilding all geometry |
 | `swap_ms` | Swapping the built geometry into the scene and refreshing the project picker |
-| `pyodide_load_ms` | Python cold start, reported by the first script after it |
-| `open_ms` | Python parsing the IFC |
+| `pyodide_load_ms` | Python cold start, reported by the first script after it; usually absent, since Python starts when the agent connects |
+| `open_ms` | Python parsing the IFC; 0 when it reused the model it kept |
 | `index_ms` | Building `si`; 0 if the script didn't read it or reused the cached index |
 | `exec_ms` | Running the script, excluding `index_ms` |
 | `verify_ms`, `write_ms` | Checking changed elements and writing the IFC, for committing scripts |

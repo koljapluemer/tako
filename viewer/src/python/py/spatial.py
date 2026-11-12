@@ -42,6 +42,9 @@ GEOMETRY_CLASSES = (
     "IfcBeam", "IfcStair", "IfcRamp", "IfcRailing", "IfcCovering", "IfcPlate", "IfcMember",
 )
 SKIP = ("IfcOpeningElement", "IfcVirtualElement", "IfcSpace", "IfcAnnotation", "IfcGrid")
+# A supplied geometry row: bbox min xyz, bbox max xyz, plan axis xy, length, thickness, footprint centre xy.
+# Spaces only need the bbox; their other values are NaN. Written by scriptGeometry in ifc-worker.ts.
+GEOMETRY_ROW = 12
 
 
 def compass_label(bearing: float) -> str:
@@ -92,10 +95,15 @@ class Room:
 
 
 class SpatialIndex:
-    """Lazily computed per-model facts. Rebuilt when the session generation changes."""
+    """Lazily computed per-model facts. Rebuilt when the session generation changes.
 
-    def __init__(self, model: ifcopenshell.file):
+    `geometry` maps element ids to rows the viewer measured from its own tessellation
+    (see GEOMETRY_ROW); elements without a row are tessellated here.
+    """
+
+    def __init__(self, model: ifcopenshell.file, geometry: dict[int, np.ndarray] | None = None):
         self.f = model
+        self._supplied = geometry or {}
         self.unit = unit_scale(model)
         self.facts: dict[int, Facts] = {}
         self.rooms: dict[int, Room] = {}
@@ -181,7 +189,14 @@ class SpatialIndex:
             container = ue.get_aggregate(sp)
             self.rooms[sp.id()] = Room(sp.id(), sp.GlobalId, sp.Name, sp.LongName,
                                        container.Name if container is not None and container.is_a("IfcBuildingStorey") else None)
-        self._for_each_shape(spaces, self._set_room_box)
+        missing = []
+        for sp in spaces:
+            row = self._supplied.get(sp.id())
+            if row is None:
+                missing.append(sp)
+            else:
+                self.rooms[sp.id()].bbox_min, self.rooms[sp.id()].bbox_max = row[0:3].copy(), row[3:6].copy()
+        self._for_each_shape(missing, self._set_room_box)
         by_element: dict[int, set[int]] = {}
         for b in self.f.by_type("IfcRelSpaceBoundary"):
             room = self.rooms.get(b.RelatingSpace.id()) if b.RelatingSpace is not None and b.RelatingSpace.is_a("IfcSpace") else None
@@ -252,7 +267,24 @@ class SpatialIndex:
         def visit(shape_id: int, v: np.ndarray) -> None:
             if (fa := self.facts.get(shape_id)) is not None:
                 self._set_geometry(fa, v)
-        self._for_each_shape(els, visit)
+        missing = []
+        for el in els:
+            row = self._supplied.get(el.id())
+            if row is None or np.isnan(row[6]):
+                missing.append(el)
+            else:
+                self._set_measured(self.facts[el.id()], row)
+        self._for_each_shape(missing, visit)
+
+    @staticmethod
+    def _set_measured(fa: Facts, row: np.ndarray) -> None:
+        """The same fields as _set_geometry, from a row the viewer measured."""
+        fa.bbox_min, fa.bbox_max = row[0:3].copy(), row[3:6].copy()
+        fa.center = (fa.bbox_min + fa.bbox_max) / 2
+        fa.axis = row[6:8].copy()
+        fa.length = float(row[8])
+        fa.thickness = float(row[9])
+        fa.extras["footprint_center"] = row[10:12].copy()
 
     @staticmethod
     def _set_geometry(fa: Facts, v: np.ndarray) -> None:

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   changeRevision, exportModel, importProject, inspectElement, jumpToRevision, listProjects, listRevisions, loadNavigation, openProject, selectElement,
-  executeCommand, modelEvents, onModelEvent, queryDocument, reviseEdit, type LoadedModel, type OpenedDocument,
+  executeCommand, modelEvents, onModelEvent, queryDocument, reviseEdit, warmScripts, type LoadedModel, type OpenedDocument,
 } from './model';
 import type { DocumentSummary } from './worker-protocol';
 import { connectAgent } from './agent-client';
@@ -329,6 +329,7 @@ const connect = (port: number) => connectAgent({
   onModelEvent,
   status: setStatus,
   query: queryDocument,
+  warm: warmScripts,
   execute: async (document, command, title) => {
     const executed = await executeCommand(document, command, setStatus, title);
     modelCache.dropAfter(document.id, executed.document.revision, current);

@@ -18,7 +18,8 @@ import {
   commitProject, importProject, listProjects, loadRevision, openProject, saveFocus, saveManifest,
   type HistoryEntry, type ProjectManifest,
 } from './project-store';
-import { kitHelp, runScript } from './python/client';
+import { footprint } from './plan-footprint';
+import { holdsModel, kitHelp, primeScripts, runScript, type ScriptGeometry } from './python/client';
 import { PROTOCOL_VERSION, type AgentQuery, type CommandResult, type DocumentCommand, type NavBuild, type TextReplacement } from './worker-protocol';
 import type {
   Box2, CollisionPart, DocumentSummary, ElementInfo, LoadResult, RenderPart, RevisionInfo, Rgba, StoreyInfo,
@@ -56,6 +57,21 @@ let viewerShift: Vec3 = [0, 0, 0];
 let trueNorth: North = [0, 1];
 /** Why the last open failed; cleared by the next one that succeeds. */
 let modelFailure: string | null = null;
+/** Counts successful opens, so data measured from one open is never used for another. */
+let openSerial = 0;
+/** What the spatial index needs from the viewer's tessellation, for the open it was measured from. */
+let scriptGeometry: (ScriptGeometry & { serial: number }) | null = null;
+/** Set once an agent connects: from then on, each new model state is parsed for scripts ahead of time. */
+let scriptsWanted = false;
+
+// The classes SpatialIndex measures (GEOMETRY_CLASSES in python/py/spatial.py), and their subtypes.
+const INDEXED_CLASSES = new Set([
+  'IfcWall', 'IfcCurtainWall', 'IfcDoor', 'IfcWindow', 'IfcSlab', 'IfcRoof', 'IfcColumn',
+  'IfcBeam', 'IfcStair', 'IfcRamp', 'IfcRailing', 'IfcCovering', 'IfcPlate', 'IfcMember',
+]);
+const isIndexed = (ifcClass: string) => INDEXED_CLASSES.has(ifcClass.replace(/(StandardCase|ElementedCase)$/, ''));
+/** Values per element in ScriptGeometry: GEOMETRY_ROW in python/py/spatial.py. */
+const GEOMETRY_ROW = 12;
 
 /** Thrown without a stack in its message: the agent reads it and should act on it, not debug it. */
 class ModelUnavailable extends Error {
@@ -98,6 +114,7 @@ function openIfc(data: Uint8Array, reason: string): number {
   }
   modelFailure = null;
   openModel = modelID;
+  openSerial += 1;
   return modelID;
 }
 
@@ -257,15 +274,14 @@ function readStoreys(modelID: number, slabs: Map<number, Bounds>, stairs: Map<nu
 // --- requests ---------------------------------------------------------------
 type PendingNavigation = NavInput & { doorInfo: NavDoor[]; spaces: NavSpace[]; storeys: StoreyInfo[] };
 /** web-ifc's mesh stream leaves spaces out, so they are meshed one by one. Spaces are optional enrichment. */
-function readSpaces(modelID: number): NavSpace[] {
-  const out: NavSpace[] = [];
+function readSpaces(modelID: number): Array<{ id: number; name: string | null; bounds: NavBounds }> {
+  const out: Array<{ id: number; name: string | null; bounds: NavBounds }> = [];
   const ids = api.GetLineIDsWithType(modelID, IFCSPACE);
   for (let i = 0; i < ids.size(); i++) {
     const id = ids.get(i);
     try {
       const line = api.GetLine(modelID, id);
       const name = text(line.LongName) ?? text(line.Name);
-      if (!name) continue;
       const placed = api.GetFlatMesh(modelID, id).geometries;
       const baked: number[] = [];
       for (let g = 0; g < placed.size(); g++) {
@@ -275,7 +291,7 @@ function readSpaces(modelID: number): NavSpace[] {
         geometry.delete();
         baked.push(...bake(verts, indices, Array.from(placed.get(g).flatTransformation), id).positions);
       }
-      if (baked.length) out.push({ bounds: boundsOf(new Float32Array(baked)), name });
+      if (baked.length) out.push({ id, bounds: boundsOf(new Float32Array(baked)), name });
     } catch {
       // A broken space costs its name and nothing else.
     }
@@ -330,10 +346,13 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   const doorBounds: NavBounds[] = [];
   const doorIds = new Set<number>();
   const furnitureBounds: NavBounds[] = [];
+  const indexed = new Map<number, Float32Array[]>();
 
   api.StreamAllMeshes(modelID, (flatMesh) => {
     const expressID = flatMesh.expressID;
     const type = api.GetLineType(modelID, expressID);
+    const measured = isIndexed(api.GetNameFromTypeCode(type)) ? (indexed.get(expressID) ?? []) : null;
+    if (measured) indexed.set(expressID, measured);
     const walk = classify(type, () => api.GetLine(modelID, expressID).PredefinedType?.value);
     const door = isDoor(type);
     const furniture = isFurniture(type);
@@ -346,6 +365,7 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
       const indices = api.GetIndexArray(geom.GetIndexData(), geom.GetIndexDataSize());
       geom.delete();
       const chunk = bake(verts, indices, Array.from(pg.flatTransformation), expressID);
+      measured?.push(chunk.positions);
       const color: Rgba = [pg.color.x, pg.color.y, pg.color.z, pg.color.w];
 
       const cell = cellKey(chunk.positions);
@@ -441,9 +461,11 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
   // A copy: some of these chunks' buffers are transferred to the main thread with the result.
   const { positions: navPositions, indices: navIndices } = concat([...floorChunks, ...solidChunks], false);
   const storeys = readStoreys(modelID, slabs, stairs);
+  const spaces = readSpaces(modelID);
+  scriptGeometry = { serial: openSerial, ...measureForScripts(indexed, spaces) };
   navInput = {
     positions: navPositions, indices: navIndices, doors: doorBounds, furniture: furnitureBounds, storeys,
-    spaces: readSpaces(modelID),
+    spaces: spaces.flatMap(({ name, bounds }) => (name ? [{ name, bounds }] : [])),
     doorInfo: [...doorIds].map((id) => {
       const fact = semanticFacts.get(id);
       const { min, max } = allBounds.get(id)!;
@@ -461,7 +483,64 @@ async function openData(data: Uint8Array, standaloneIds: number[]): Promise<{ re
     coordination: Array.from(api.GetCoordinationMatrix(modelID)),
     navToken,
   };
+  if (scriptsWanted) schedulePrime();
   return { result, transfer: [...transfer] };
+}
+
+/** Bounding boxes and plan footprints in IFC world metres, so Python needn't tessellate the model again. */
+function measureForScripts(indexed: Map<number, Float32Array[]>, spaces: Array<{ id: number; bounds: NavBounds }>): ScriptGeometry {
+  const ids = new Int32Array(indexed.size + spaces.length);
+  const values = new Float64Array(ids.length * GEOMETRY_ROW).fill(NaN);
+  let row = 0;
+  for (const [id, arrays] of indexed) {
+    const xy: number[] = [];
+    // web-ifc repeats a vertex for every face that uses it; IfcOpenShell welds them. Counting each corner once
+    // keeps the principal axis the same as a tessellating SpatialIndex would find, instead of following face density.
+    const seen = new Set<string>();
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const positions of arrays) {
+      for (let i = 0; i < positions.length; i += 3) {
+        const p = viewerToIfc([positions[i], positions[i + 1], positions[i + 2]], viewerShift);
+        for (let axis = 0; axis < 3; axis++) {
+          min[axis] = Math.min(min[axis], p[axis]);
+          max[axis] = Math.max(max[axis], p[axis]);
+        }
+        const corner = `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)},${Math.round(p[2] * 1000)}`;
+        if (seen.has(corner)) continue;
+        seen.add(corner);
+        xy.push(p[0], p[1]);
+      }
+    }
+    if (!xy.length) continue;
+    const plan = footprint(xy);
+    ids[row] = id;
+    values.set([...min, ...max, ...plan.axis, plan.length, plan.thickness, ...plan.centre], row * GEOMETRY_ROW);
+    row += 1;
+  }
+  for (const { id, bounds } of spaces) {
+    const box = viewerBoundsToIfc(bounds.min as Vec3, bounds.max as Vec3, viewerShift);
+    ids[row] = id;
+    values.set([...box.min, ...box.max], row * GEOMETRY_ROW);
+    row += 1;
+  }
+  return { ids: ids.slice(0, row), values: values.slice(0, row * GEOMETRY_ROW) };
+}
+
+/** The measured geometry, if it was measured from the model that is open now. */
+const currentGeometry = (): ScriptGeometry | null => (scriptGeometry?.serial === openSerial ? scriptGeometry : null);
+
+/** Parses the current model state in the Python worker without holding up the request queue. */
+function primeNow() {
+  if (openModel == null || !manifest || deferred) return;
+  const key = indexKey();
+  if (holdsModel(key)) return;
+  primeScripts(key, api.SaveModel(openModel), currentGeometry()).catch((error) => console.warn('priming Python failed', error));
+}
+
+/** Primes once the current request is done, when manifest and history describe the model that was just opened. */
+function schedulePrime() {
+  queue = queue.then(primeNow);
 }
 
 const text = (v: unknown): string | null => {
@@ -612,7 +691,9 @@ async function queryAgent(query: AgentQuery): Promise<unknown> {
   if (openModel == null) throw new ModelUnavailable();
   if (query.method === 'interaction_context') return interactionContext(query.params);
   if (query.method === 'inspect_with_script') {
-    const { output, timing } = await runScript(api.SaveModel(openModel!), query.params.code, query.params.values, false, indexKey(), reportProgress);
+    const { output, timing } = await runScript(
+      () => api.SaveModel(openModel!), query.params.code, query.params.values, false, indexKey(), currentGeometry(), reportProgress,
+    );
     return { ok: true, output, committed: false, timing };
   }
   if (query.method === 'model_overview') {
@@ -743,7 +824,7 @@ type Applied = { changed: number[]; summary: string; bytes?: Uint8Array; warning
 
 async function applyScript(command: Extract<DocumentCommand, { kind: 'script' }>, model: Uint8Array): Promise<Applied> {
   const { code, summary, values } = command.params;
-  const result = await runScript(model, code, values, true, indexKey(), reportProgress);
+  const result = await runScript(() => model, code, values, true, indexKey(), currentGeometry(), reportProgress);
   return { summary, changed: result.changed, bytes: result.bytes, warnings: result.verify.problems, output: result.output, timing: result.timing };
 }
 
@@ -1114,6 +1195,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         await ensureOpen();
         const rendered = await render(request.standalone);
         post({ type: 'rendered', id: request.id, document: document(), result: rendered.result }, rendered.transfer);
+      } else if (request.type === 'warmScripts') {
+        scriptsWanted = true;
+        primeNow();
+        post({ type: 'warmed', id: request.id });
       } else if (request.type === 'navigation') {
         const { result, transfer } = await navigation(request.token).catch((error) => {
           console.warn('navmesh generation failed', error);
