@@ -12,13 +12,13 @@ const BRIDGE_PORT = 47833;
 const RESET_DONE = 'Claude restarted';
 const ROOT = join(import.meta.dirname, '../..');
 
-const SYSTEM_PROMPT = `The user is standing inside this building wearing a VR headset and speaks short requests, transcribed by speech recognition, so expect transcription slips. "This" or "that" means the element they point at: use get_focus. They cannot read long text or answer questions easily, so make a sensible assumption and act. Do not delete anything unless they explicitly asked for it. End with one plain sentence of at most 12 words saying what changed. No markdown.
+const SYSTEM_PROMPT = `The user is standing inside this building wearing a VR headset and speaks short requests, transcribed by speech recognition, so expect transcription slips. "This" or "that" means what they have painted, or else what is in front of them. They cannot read long text or answer questions easily, so make a sensible assumption and act. Do not delete anything unless they explicitly asked for it. End with one plain sentence of at most 12 words saying what changed. No markdown.
 
-A request may start with a block describing the user's current state: where they stand, and anything they have spray-painted. Paint is a general way to point at elements and places, and it can mean whatever the request needs. A colour name selects that colour's group; "marked" or "painted" with no colour means all paint. Each line gives the painted element, the centre of the paint on it (a location in IFC world metres) and its size. Treat size as a dimension only if the user says so. Elements with few dots compared with others in their colour are probably over-spray, so leave them out unless the request clearly includes them. "This" without a colour still uses get_focus. Ignore state blocks from earlier requests.`;
+A request may start with a block describing the user's current state: where they stand, and anything they have spray-painted. Paint is a general way to point at elements and places, and it can mean whatever the request needs. A colour name selects that colour's group; "marked" or "painted" with no colour means all paint. Each line gives the painted element, the centre of the paint on it (a location in IFC world metres) and its size. Treat size as a dimension only if the user says so. Elements with few dots compared with others in their colour are probably over-spray, so leave them out unless the request clearly includes them. Ignore state blocks from earlier requests.`;
 
 const TOOL_STATUS: Record<string, string> = {
   run_ifcopenshell: 'Editing the model…', revise_edit: 'Revising the edit…', kit_help: 'Reading the kit…',
-  get_focus: 'Looking at what you pointed at…', find_elements: 'Searching the model…', context_around: 'Looking around it…',
+  find_elements: 'Searching the model…', context_around: 'Looking around it…',
 };
 
 type Outgoing = { type: 'status' | 'reply' | 'error'; text: string };
@@ -47,6 +47,8 @@ function startClaude() {
     '--strict-mcp-config', '--mcp-config', mcpConfig,
     // Nobody can answer a permission prompt from inside the headset, so Claude gets the tako tools and nothing else.
     '--tools', '', '--allowedTools', 'mcp__tako-ifc__*',
+    // The focus is the desktop selection; in the headset it would be stale.
+    '--disallowedTools', 'mcp__tako-ifc__get_focus',
     '--append-system-prompt', SYSTEM_PROMPT,
   ], { cwd: ROOT });
   started.stderr.on('data', (data) => process.stderr.write(data));

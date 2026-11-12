@@ -366,16 +366,7 @@ const voice = new VoiceAgent((text, busy) => {
   if (!pose) return undefined;
   return await queryDocument({ method: 'interaction_context', params: { ...pose, paint: xr.spray.log.summary() } }) as string;
 });
-xr.onTalk = (ray) => {
-  if (!ray) return voice.stopRecording();
-  if (current) {
-    const picked = pickAlong(ray, current);
-    selectionMarker.visible = picked != null;
-    if (picked) selectionMarker.position.copy(picked.point);
-    void selectElement(picked?.expressID ?? null);
-  }
-  voice.startRecording();
-};
+xr.onTalk = (talking) => (talking ? voice.startRecording() : voice.stopRecording());
 
 if (import.meta.env.DEV) {
   // Test hook: lets browser automation read renderer stats and drive the session.

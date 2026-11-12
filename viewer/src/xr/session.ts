@@ -66,8 +66,8 @@ export class XRWalk {
   /** Set while the user is being moved. */
   private locked = false;
   private talking = false;
-  /** Called with the pointing ray when hold-to-talk starts, and null when it ends. */
-  onTalk: ((ray: THREE.Ray | null) => void) | null = null;
+  /** Called with true when hold-to-talk starts, and false when it ends. */
+  onTalk: ((talking: boolean) => void) | null = null;
   private stickAims = new Map<Pointer, FloorAim>();
   /** Sticks that have recentred since their last push. */
   private sticksAtRest = new WeakSet<Pointer>();
@@ -292,7 +292,7 @@ export class XRWalk {
 
   private onSessionEnd() {
     const { camera, desktop } = this;
-    if (this.talking) this.onTalk?.(null);
+    if (this.talking) this.onTalk?.(false);
     this.talking = false;
     this.spraying.clear();
     this.spray.clear();
@@ -497,7 +497,7 @@ export class XRWalk {
     if (!!pressing === this.talking) return;
     this.talking = !!pressing;
     if (pressing) pulse(pressing.source);
-    this.onTalk?.(pressing ? pointerRay(pressing, new THREE.Ray()) : null);
+    this.onTalk?.(this.talking);
   }
 
   private placeAtSpawn() {
