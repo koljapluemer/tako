@@ -9,27 +9,21 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 
 export type Landing = { name: string; position: THREE.Vector3 };
 
-/** With a navmesh: is this point somewhere a person can get to? */
+/** With a navmesh: is this point on walkable surface the IFC classes may not mark as floor? */
 export type Reach = (point: THREE.Vector3) => boolean;
 
 const NAV_REACH = 0.6;
 
-/** Accepts the largest connected area, or the one the user is already in (a balcony they were sent to, say). */
-export function navReach(nav: NavMesh, user: () => THREE.Vector3): Reach {
-  return (point) => {
-    const landing = nav.at(point.x, point.y, point.z, NAV_REACH);
-    if (!landing) return false;
-    if (landing.component === 0) return true;
-    const { x, y, z } = user();
-    return nav.at(x, y, z, NAV_REACH)?.component === landing.component;
-  };
+/** Any part of the navmesh counts: limiting it to connected areas locked users out whenever they stood off the mesh. */
+export function navReach(nav: NavMesh): Reach {
+  return (point) => nav.at(point.x, point.y, point.z, NAV_REACH) != null;
 }
 
 /** Can someone of this height stand here? Spheres start above step height so the floor itself doesn't count. */
 export function isValidLanding(collision: Collision, hit: Hit, headHeight: number, reach: Reach | null = null): boolean {
   if (hit.normal.y < MAX_SLOPE_COS) return false;
-  // Without a navmesh, IFC classes are all there is to go on.
-  if (reach ? !reach(hit.point) : hit.kind !== 'floor') return false;
+  // Floor classes always count; the navmesh only adds surfaces they miss, such as floors modelled as proxies.
+  if (hit.kind !== 'floor' && !reach?.(hit.point)) return false;
   const top = hit.point.y + Math.max(headHeight, 1);
   const center = hit.point.clone();
   for (center.y = hit.point.y + STEP + BODY_RADIUS; center.y < top; center.y += BODY_RADIUS * 1.5) {

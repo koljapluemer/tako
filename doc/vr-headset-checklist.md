@@ -34,7 +34,7 @@ check those against the corpus tests too (`just corpus`, then `npm test` in `vie
 
 ### Walkability
 - [ ] Note how long navmesh generation takes on the largest building and how heavy Recast feels on the headset.
-- [ ] Unreachable spots show a red teleport arc; reachable spots are accepted.
+- [ ] Spots without room to stand (walls, low ceilings, steep or non-floor surfaces) show a red teleport arc; floors and other navmesh surfaces are accepted, including before the navmesh has loaded.
 - [ ] Walking through a railing or low furniture dims the view and shows the hint.
 - [ ] Stairs are walkable. If not, tune `AGENT_CLIMB` (`viewer/src/nav/navmesh.ts`).
 

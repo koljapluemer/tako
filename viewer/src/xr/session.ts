@@ -477,11 +477,11 @@ export class XRWalk {
     this.revalidate();
   }
 
-  /** The navmesh arrives after the model; until then teleport works from IFC classes. */
+  /** The navmesh arrives after the model; it adds walkable surfaces the IFC classes miss. */
   setNavigation(model: LoadedModel) {
     if (model !== this.model || !model.nav) return;
     this.walking.setNavigation(model.nav);
-    const reach = navReach(model.nav, () => this.feet());
+    const reach = navReach(model.nav);
     this.teleport.reach = reach;
     this.placement.reach = reach;
     const landings = storeyLandings(model.collision, model.storeys, model.terrain, reach);
@@ -490,11 +490,6 @@ export class XRWalk {
       ? { name: entrance.name, position: new THREE.Vector3(...entrance.position), yaw: entrance.yaw }
       : spawnLanding(landings));
     this.station.setNavigation(model);
-  }
-
-  private feet() {
-    this.camera.getWorldPosition(head);
-    return new THREE.Vector3(head.x, this.walking.floorY, head.z);
   }
 
   private updateTalk() {
