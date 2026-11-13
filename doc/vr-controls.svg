@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1120 830" width="1120" height="830" font-family="Inter, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">tako VR controls on Meta Quest controllers</title>
-  <desc id="desc">Pushing the right thumbstick forward aims a teleport, turning it while aiming chooses the landing direction, and releasing it teleports; left or right snap turns 30 degrees. Pushing the left thumbstick forward aims a straight ray that places the mini model and revision cards on the floor when released. Either trigger presses the panel it points at; otherwise the right trigger does what the held tool does: nothing with the pointer, spray paint with the spray can. A panel on the left controller shows the agent's messages and a compass with the distance to the latest change, which teleports there when pressed; it also picks the tool and turns the change highlight on or off. Grip grabs the mini model. Holding X returns to the start. While holding the spray can, tapping A undoes the last paint stroke and holding it deletes all paint. Holding Y or B talks to the agent.</desc>
+  <desc id="desc">Pushing the right thumbstick forward aims a teleport, turning it while aiming chooses the landing direction, and releasing it teleports; left or right snap turns 30 degrees. Pushing the left thumbstick forward aims a straight ray that places a table with the mini model, its controls on the table's edge and the revision cards behind it when released. Either trigger presses the panel it points at; otherwise the right trigger does what the held tool does: nothing with the pointer, spray paint with the spray can. A panel on the left controller shows the agent's messages and a compass with the distance to the latest change, which teleports there when pressed; it steps back and forth between revisions, picks the tool and turns the change highlight on or off. Grip grabs the mini model. Holding X returns to the start. While holding the spray can, tapping A undoes the last paint stroke and holding it deletes all paint. Holding Y or B talks to the agent.</desc>
   <defs>
     <g id="controller">
       <!-- Trigger, behind the body; its colour comes from the use element -->
@@ -126,5 +126,5 @@
   <rect x="380" y="750" width="360" height="60" rx="10" fill="#ffffff" stroke="#0369a1" stroke-width="1.75"/>
   <text x="396" y="774" font-size="16" font-weight="700" fill="#0369a1">Left controller panel</text>
   <text x="560" y="774" font-size="13" fill="#57534e">press with the right trigger</text>
-  <text x="396" y="796" font-size="14" fill="#44403c">Agent messages · compass to the change · tool · highlight</text>
+  <text x="396" y="796" font-size="14" fill="#44403c">Messages · compass to the change · revisions · tool · highlight</text>
 </svg>

@@ -45,6 +45,7 @@ check those against the corpus tests too (`just corpus`, then `npm test` in `vie
 ### Versions
 Needs a building with at least two revisions on the headset.
 - [ ] A/B switching keeps position and feels immediate.
+- [ ] The wrist panel's revision row names the current revision ("Latest" on the newest); ‹ and › step back and forth, and are dimmed at either end. Rapid presses land on the last one pressed.
 - [ ] `MAX_CACHED_MODELS` and `MAX_CACHED_BYTES` (`viewer/src/versions.ts`) don't exhaust memory.
 
 ### Mini model
@@ -54,7 +55,8 @@ Needs a building with at least two revisions on the headset.
 - [ ] The Opacity slider tracks the ray, keeps dragging past the panel edge, and reaches both ends. Opacity 0 and 1 both look right.
 - [ ] Nav points off hides the pins and they can't be pressed or hovered.
 - [ ] Frame rate holds with the station open on the largest building: the mini model repeats the building's draw calls.
-- [ ] At zoom 1, the panel doesn't touch the model, cards or buttons, across the buildings. Tune `MAX_HEIGHT` (`viewer/src/xr/mini-view.ts`) and `CONTROLS_ANGLE` and `CONTROLS_HEIGHT` (`viewer/src/xr/station.ts`).
+- [ ] The table fits the model at zoom 1 with a small margin, across the buildings, and grows to it once the navmesh is in. Tune `TABLE_MARGIN`, `TABLE_MIN` and `TABLE_MAX` (`viewer/src/xr/station.ts`).
+- [ ] The lip on the table's near edge reads clearly from where you stand and is easy to hit with either ray; Close on it puts the whole station away. Tune `LIP_TILT` (`viewer/src/xr/station.ts`).
 
 ### Station
 - [ ] Left stick forward aims a straight ray that places the station on valid floor and refuses anything else; a new one replaces the old.
@@ -86,10 +88,10 @@ Needs a building with at least two revisions on the headset.
 - [ ] Six colours in use refuses a seventh with a notice.
 - [ ] After a voice edit, colours on the changed elements go and the others stay in place, even if the origin shifts. Undo, a revision jump or a new building clears all paint.
 - [ ] Holding X fills the ring and returns once to the exact spot you started at, even if the navmesh finished after you entered; releasing early cancels, and it stays put while still held. Tune `RETURN_HOLD_MS` (`viewer/src/xr/session.ts`) and the ring size (`viewer/src/xr/hold-ring.ts`).
-- [ ] Model height and card distance feel right, and the cards read clearly. Tune `MODEL_HEIGHT`, `STAND_DISTANCE` and `CARD_HEIGHT` (`viewer/src/xr/station.ts`).
+- [ ] Table height and card distance feel right; the cards clear the tallest model and read clearly. Tune `TABLE_TOP` (`viewer/src/xr/pedestal.ts`), `STAND_DISTANCE` and `CARD_HEIGHT` (`viewer/src/xr/station.ts`).
 - [ ] A station placed close to a wall is still usable: the model can clip into it.
 - [ ] Walls hide the station and stop presses reaching it.
-- [ ] Close works, Buildings switches building, and a revision swap keeps the station in place.
+- [ ] Close works, the Revisions | Buildings tab swaps the cards, a building card switches building, and a revision swap keeps the station in place.
 
 ### Finish
 - [ ] Bounded-floor works where available, with no offset compared with local-floor.

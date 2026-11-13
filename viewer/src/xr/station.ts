@@ -4,111 +4,76 @@ import type { LoadedModel } from '../model';
 import type { NavPoint } from '../nav/points';
 import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
-import { Arc, ARC_ANGLE_STEP, ARC_RADIUS } from './arc';
-import { MiniControls } from './mini-controls';
+import { Arc, CARD_H } from './arc';
+import { MiniControls, PANEL_H, type LipPlacement } from './mini-controls';
 import { MiniModel, type MiniInput } from './mini-model';
-import { CanvasPanel, type LimitedRay } from './panel';
+import { MAX_HEIGHT } from './mini-view';
+import type { LimitedRay } from './panel';
+import { Pedestal, TABLE_TOP } from './pedestal';
 
-const MODEL_HEIGHT = 0.95;
-const STAND_DISTANCE = 0.7;
-const CARD_HEIGHT = 1.45;
-const BUTTON_W = 0.2;
-const BUTTON_H = 0.09;
-/** Just past the last of the arc's five slots, so scrolling never moves them. */
-const BUTTON_SLOT = 3;
-/** Right of the model's widest silhouette, below the row of cards and buttons. */
-const CONTROLS_ANGLE = 0.85;
-const CONTROLS_HEIGHT = 1.19;
+/** The model stands on the table, just clear of its top. */
+const MODEL_HEIGHT = TABLE_TOP + 0.005;
+const STAND_DISTANCE = 0.75;
+/** Card bottoms clear the tallest model the table can hold. */
+export const CARD_HEIGHT = TABLE_TOP + MAX_HEIGHT + 0.04 + CARD_H / 2;
+/** Table radius bounds, and the margin left around the model's widest turn. */
+export const TABLE_MIN = 0.22;
+export const TABLE_MAX = 0.45;
+const TABLE_MARGIN = 0.05;
+/** The lip's face leans back from vertical, so it faces the eyes of someone standing at the table. */
+export const LIP_TILT = THREE.MathUtils.degToRad(55);
+const LIP_GAP = 0.012;
 const WALL_RANGE = 40;
 
 export type Placed = { position: THREE.Vector3; rotationY: number };
 
-/** `yaw` is the direction the user looks in when facing the station, as atan2(x, z). */
-export function stationLayout(anchor: THREE.Vector3, yaw: number) {
-  const stand = new THREE.Vector3(anchor.x - Math.sin(yaw) * STAND_DISTANCE, anchor.y, anchor.z - Math.cos(yaw) * STAND_DISTANCE);
+/** The table that fits a mini model which turns within `modelRadius`. */
+export function tableRadius(modelRadius: number | null): number {
+  return THREE.MathUtils.clamp((modelRadius ?? 0) + TABLE_MARGIN, TABLE_MIN, TABLE_MAX);
+}
+
+/**
+ * `yaw` is the direction the user looks in when facing the station, as atan2(x, z); `radius` is the table's.
+ * Front to back as seen by the user: the lip on the table's near edge, the model on the table, the cards above and behind.
+ */
+export function stationLayout(anchor: THREE.Vector3, yaw: number, radius: number) {
+  const toward = (distance: number, height: number) => new THREE.Vector3(anchor.x - Math.sin(yaw) * distance, height, anchor.z - Math.cos(yaw) * distance);
+  const stand = toward(STAND_DISTANCE, anchor.y);
   const y = anchor.y + CARD_HEIGHT;
-  const onArc = (angle: number, height = y): Placed => ({
-    position: new THREE.Vector3(stand.x + Math.sin(angle) * ARC_RADIUS, height, stand.z + Math.cos(angle) * ARC_RADIUS),
-    rotationY: angle + Math.PI,
-  });
+  // The lip's back edge meets the table's rim; its face leans back towards the user.
+  const back = radius + LIP_GAP;
+  const lip: LipPlacement = {
+    position: toward(back + (PANEL_H / 2) * Math.sin(LIP_TILT), anchor.y + TABLE_TOP - (PANEL_H / 2) * Math.cos(LIP_TILT) - LIP_GAP),
+    rotationY: yaw + Math.PI,
+    tilt: LIP_TILT,
+  };
   return {
     stand,
+    table: anchor.clone(),
     model: new THREE.Vector3(anchor.x, anchor.y + MODEL_HEIGHT, anchor.z),
+    lip,
     arcCentre: new THREE.Vector3(stand.x, y, stand.z),
-    // Slots run towards smaller angles, left to right as seen by the user.
-    switcher: onArc(yaw + BUTTON_SLOT * ARC_ANGLE_STEP),
-    close: onArc(yaw - BUTTON_SLOT * ARC_ANGLE_STEP),
-    controls: onArc(yaw - CONTROLS_ANGLE, anchor.y + CONTROLS_HEIGHT),
   };
 }
 
-class Button {
-  readonly panel = new CanvasPanel(BUTTON_W, BUTTON_H, { pixelsPerMetre: 2000, depthTest: true });
-  private hovered = false;
-
-  constructor(scene: THREE.Scene, private label: string, readonly run: () => void) {
-    scene.add(this.panel.mesh);
-    this.draw();
-  }
-
-  place({ position, rotationY }: Placed) {
-    const { mesh } = this.panel;
-    mesh.position.copy(position);
-    mesh.rotation.y = rotationY;
-    mesh.updateMatrixWorld(true);
-  }
-
-  setLabel(label: string) {
-    if (label === this.label) return;
-    this.label = label;
-    this.draw();
-  }
-
-  setHovered(hovered: boolean) {
-    if (hovered === this.hovered) return;
-    this.hovered = hovered;
-    this.draw();
-  }
-
-  private draw() {
-    const { ctx, canvasWidth: w, canvasHeight: h } = this.panel;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = this.hovered ? 'rgba(40,70,90,0.95)' : 'rgba(20,22,26,0.92)';
-    ctx.beginPath();
-    ctx.roundRect(0, 0, w, h, h / 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = '500 64px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(this.label, w / 2, h / 2, w - 40);
-    this.panel.refresh();
-  }
-}
-
-/** The mini model and revision cards, anchored together on a spot of floor. There is at most one. */
+/** The mini model on its table, with the revision cards behind it. There is at most one. */
 export class Station {
   private mini: MiniModel;
   private controls: MiniControls;
   private arc: Arc;
-  private close_: Button;
-  private switcher: Button;
-  private ring: THREE.Mesh;
+  private pedestal: Pedestal;
   private collision: Collision | null = null;
   private opened = false;
+  private anchor = new THREE.Vector3();
+  private yaw = 0;
+  private radius = TABLE_MIN;
 
   constructor(scene: THREE.Scene) {
     this.mini = new MiniModel(scene);
     this.controls = new MiniControls(scene, this.mini);
+    this.controls.onClose = () => this.close();
     this.arc = new Arc(scene);
-    this.close_ = new Button(scene, 'Close', () => this.close());
-    this.switcher = new Button(scene, 'Buildings', () => this.toggleList());
-    this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.26, 0.3, 40).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0x35d0ff, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }),
-    );
-    this.ring.visible = false;
-    scene.add(this.ring);
+    this.pedestal = new Pedestal(scene);
   }
 
   set onPin(run: (point: NavPoint) => void) {
@@ -136,17 +101,16 @@ export class Station {
     this.close();
     const dx = anchor.x - head.x;
     const dz = anchor.z - head.z;
-    const yaw = dx * dx + dz * dz > 0.01 ? Math.atan2(dx, dz) : 0;
-    const layout = stationLayout(anchor, yaw);
+    this.yaw = dx * dx + dz * dz > 0.01 ? Math.atan2(dx, dz) : 0;
+    this.anchor.copy(anchor);
+    this.radius = tableRadius(null);
+    const layout = stationLayout(anchor, this.yaw, this.radius);
     this.mini.open(layout.model);
-    this.controls.open(layout.controls);
-    void this.arc.open(layout.arcCentre, yaw);
-    this.close_.place(layout.close);
-    this.switcher.place(layout.switcher);
-    this.switcher.setLabel('Buildings');
-    this.ring.position.set(anchor.x, anchor.y + 0.012, anchor.z);
-    this.setVisible(true);
+    this.pedestal.open(layout.table, this.radius);
+    this.controls.open(layout.lip);
+    void this.arc.open(layout.arcCentre, this.yaw);
     this.opened = true;
+    this.fitTable();
   }
 
   close() {
@@ -154,23 +118,16 @@ export class Station {
     this.arc.close();
     this.mini.close();
     this.controls.close();
-    this.setVisible(false);
+    this.pedestal.close();
   }
 
-  private setVisible(on: boolean) {
-    this.close_.panel.mesh.visible = on;
-    this.switcher.panel.mesh.visible = on;
-    this.ring.visible = on;
-  }
-
-  private toggleList() {
-    if (this.arc.showingBuildings) {
-      this.arc.showVersions();
-      this.switcher.setLabel('Buildings');
-    } else {
-      this.arc.showBuildings();
-      this.switcher.setLabel('Revisions');
-    }
+  /** The table grows or shrinks to the model once it is built, and the lip follows its edge. */
+  private fitTable() {
+    const radius = tableRadius(this.mini.footprintRadius);
+    if (radius === this.radius) return;
+    this.radius = radius;
+    this.pedestal.setRadius(radius);
+    this.controls.move(stationLayout(this.anchor, this.yaw, radius).lip);
   }
 
   /** The list of versions, or which one is current, may have changed. */
@@ -181,14 +138,11 @@ export class Station {
   /** Keeps the station on the same bit of building when a revision shifts the origin. */
   translate(shift: THREE.Vector3) {
     if (!this.opened) return;
+    this.anchor.add(shift);
     this.mini.translate(shift);
     this.controls.translate(shift);
     this.arc.translate(shift);
-    for (const { panel } of [this.close_, this.switcher]) {
-      panel.mesh.position.add(shift);
-      panel.mesh.updateMatrixWorld(true);
-    }
-    this.ring.position.add(shift);
+    this.pedestal.translate(shift);
   }
 
   grabStart(id: number, position: THREE.Vector3) {
@@ -208,12 +162,6 @@ export class Station {
   press(ray: THREE.Ray, id: number): boolean {
     if (!this.opened) return false;
     const pick = this.limited(ray);
-    for (const button of [this.close_, this.switcher]) {
-      if (button.panel.hit(pick.ray, pick.far)) {
-        button.run();
-        return true;
-      }
-    }
     return this.controls.press(id, pick) || this.arc.press(pick) || this.mini.press(pick);
   }
 
@@ -223,11 +171,9 @@ export class Station {
 
   update({ rays, ...input }: Omit<MiniInput, 'picks'> & { rays: Array<{ id: number; ray: THREE.Ray }> }) {
     if (!this.opened) return;
+    this.fitTable();
     const picks = rays.map(({ ray }) => this.limited(ray));
     this.controls.update(rays, picks);
-    for (const button of [this.close_, this.switcher]) {
-      button.setHovered(picks.some(({ ray, far }) => button.panel.hit(ray, far)));
-    }
     this.arc.update(picks);
     this.mini.update({ ...input, picks });
   }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { LoadedModel } from '../model';
 import type { Sample } from '../samples';
-import type { VersionSource } from '../versions';
+import { formatAge, type Version, type VersionSource } from '../versions';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { changeView } from './change-view';
@@ -100,6 +100,9 @@ export class XRWalk {
   /** The latest edit's bounds, until the next edit or model switch. */
   private change: { box: THREE.Box3; centre: THREE.Vector3 } | null = null;
   private messageBusy = false;
+  private versions: VersionSource | null = null;
+  /** Drops a revision list that arrives after a newer one was asked for. */
+  private revisionRequest = 0;
   /** What a ray hits in the current model. */
   pickAt: ((ray: THREE.Ray) => { point: THREE.Vector3; normal: THREE.Vector3; expressID: number } | null) | null = null;
   /** The camera only carries the headset's pose once a frame has been rendered in the session. */
@@ -204,9 +207,44 @@ export class XRWalk {
       this.highlight = button === 'highlight-on';
       this.controllerPanel.setHighlight(this.highlight);
       this.onHighlight(this.highlight);
+    } else if (button === 'rev-prev' || button === 'rev-next') {
+      void this.stepRevision(button === 'rev-prev' ? -1 : 1);
     } else {
       this.goToChange();
     }
+  }
+
+  // --- revisions on the wrist -------------------------------------------------
+  private async listVersions(): Promise<Version[]> {
+    return await this.versions?.list().catch(() => [] as Version[]) ?? [];
+  }
+
+  /** Shows the current revision on the wrist, and whether there is one either side of it. */
+  private async refreshRevision() {
+    const request = ++this.revisionRequest;
+    const versions = await this.listVersions();
+    if (request !== this.revisionRequest) return;
+    const index = versions.findIndex((v) => v.current);
+    if (index < 0) return this.controllerPanel.setRevision(null);
+    const version = versions[index];
+    const next = index < versions.length - 1;
+    const age = formatAge(version.createdAt);
+    this.controllerPanel.setRevision({
+      title: version.title,
+      detail: next ? `${index + 1} of ${versions.length}${age ? ` · ${age}` : ''}` : 'Latest',
+      prev: index > 0,
+      next,
+    });
+  }
+
+  /** Revisions keep the user where they stand, so stepping compares in place. */
+  private async stepRevision(delta: number) {
+    const versions = await this.listVersions();
+    const index = versions.findIndex((v) => v.current);
+    const target = index < 0 ? undefined : versions[index + delta];
+    if (!target) return;
+    pulse(this.pointers.find((p) => handOf(p) === 'left')?.source ?? null);
+    this.versions?.select(target);
   }
 
   private startSpray(pointer: Pointer) {
@@ -312,6 +350,7 @@ export class XRWalk {
     this.tool = 'pointer';
     this.controllerPanel.setTool(this.tool);
     this.onHighlight(this.highlight);
+    void this.refreshRevision();
     void this.useBoundedFloor();
   }
 
@@ -369,6 +408,7 @@ export class XRWalk {
   }
 
   setVersions(source: VersionSource) {
+    this.versions = source;
     this.station.source = source;
   }
 
@@ -540,6 +580,7 @@ export class XRWalk {
     if (model.nav) this.setNavigation(model); // a cached revision already has one
 
     if (!this.presenting) return;
+    void this.refreshRevision();
     if (switched) {
       this.modelChangedInSession = true;
       this.station.close();

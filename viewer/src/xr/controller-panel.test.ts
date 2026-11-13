@@ -6,14 +6,20 @@ describe('buttonAt', () => {
   it('puts the message on top and the compass under it, both full width', () => {
     expect(buttonAt(0.05, 0.1)).toBe('message');
     expect(buttonAt(0.95, 0.3)).toBe('message');
-    expect(buttonAt(0.05, 0.5)).toBe('go');
-    expect(buttonAt(0.95, 0.55)).toBe('go');
+    expect(buttonAt(0.05, 0.4)).toBe('go');
+    expect(buttonAt(0.95, 0.5)).toBe('go');
+  });
+
+  it('puts the revision arrows at either end of the row under the compass', () => {
+    expect(buttonAt(0.05, 0.6)).toBe('rev-prev');
+    expect(buttonAt(0.95, 0.6)).toBe('rev-next');
+    expect(buttonAt(0.5, 0.6)).toBeNull();
   });
 
   it('splits the bottom rows into a label and two choices', () => {
-    expect(buttonAt(0.1, 0.7)).toBeNull();
-    expect(buttonAt(0.5, 0.7)).toBe('pointer');
-    expect(buttonAt(0.9, 0.7)).toBe('spray');
+    expect(buttonAt(0.1, 0.75)).toBeNull();
+    expect(buttonAt(0.5, 0.75)).toBe('pointer');
+    expect(buttonAt(0.9, 0.75)).toBe('spray');
     expect(buttonAt(0.1, 0.9)).toBeNull();
     expect(buttonAt(0.5, 0.9)).toBe('highlight-on');
     expect(buttonAt(0.9, 1)).toBe('highlight-off');

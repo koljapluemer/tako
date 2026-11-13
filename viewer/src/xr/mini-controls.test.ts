@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LABEL_END, PANEL_H, PANEL_W, rowAt, rowBox, TRACK_END, TRACK_START, trackValue, trackX } from './mini-controls';
+import { CLOSE_START, closeAt, LABEL_END, PANEL_H, PANEL_W, rowAt, rowBox, TRACK_END, TRACK_START, trackValue, trackX } from './mini-controls';
 
 describe('panel layout', () => {
   it('stacks the rows inside the panel without overlap', () => {
@@ -19,6 +19,14 @@ describe('panel layout', () => {
     expect(rowAt(LABEL_END, rowBox(1).centre)).toBe(-1);
     expect(rowAt(TRACK_START, 0)).toBe(-1);
     expect(rowAt(TRACK_START, PANEL_H)).toBe(-1);
+  });
+
+  it('keeps Close to the right of the controls, across both rows', () => {
+    expect(TRACK_END).toBeLessThan(CLOSE_START);
+    expect(closeAt(CLOSE_START + 0.01, rowBox(0).centre)).toBe(true);
+    expect(closeAt(CLOSE_START + 0.01, rowBox(1).centre)).toBe(true);
+    expect(closeAt(TRACK_END, rowBox(0).centre)).toBe(false);
+    expect(rowAt(CLOSE_START + 0.01, rowBox(0).centre)).toBe(-1);
   });
 });
 

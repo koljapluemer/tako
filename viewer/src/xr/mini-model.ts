@@ -83,6 +83,11 @@ export class MiniModel {
     return this.opacityValue;
   }
 
+  /** How far the built model reaches from its centre at any turn, before zooming; null until it is built. */
+  get footprintRadius(): number | null {
+    return this.built ? this.radius : null;
+  }
+
   get pinsVisible() {
     return this.pinsOn;
   }

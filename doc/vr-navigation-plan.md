@@ -35,7 +35,7 @@ provisional until those results are in.
 |---|---|---|
 | Natural walking | `viewer/src/xr/walking.ts` | Head tracked 1:1, rig follows floor height, walls fade to black rather than pushing the user |
 | Teleport and placement | `viewer/src/xr/floor-aim.ts`, `viewer/src/xr/session.ts` | Stick-held aim paths, landing validation, one job per hand, choice of facing on the right stick |
-| Station | `viewer/src/xr/station.ts` | Mini model, revision cards and their buttons, anchored on the floor |
+| Station | `viewer/src/xr/station.ts` | Table with the mini model and its controls, and the revision cards behind it, anchored on the floor |
 | Collision | `viewer/src/collision.ts` | BVH built in the worker, floor and solid parts |
 | Notices | `viewer/src/xr/notice.ts` | Status text in the headset |
 | Position across revisions | `XRWalk.setModel` in `viewer/src/xr/session.ts` | Preserved, including origin shifts; lost when switching files |
@@ -65,8 +65,9 @@ See `vr-controls.svg` for the full mapping.
   all paint.
 - **Y or B:** hold to talk to the agent.
 - The station turns to face the user once, when placed, and then stays put. It
-  holds the mini model at about waist height, with the cards behind it, and
-  Close and Buildings/Revisions buttons at either end of the cards.
+  is a table sized to the model, with the mini model on top, a lip on its near
+  edge for opacity, nav points and Close, and the cards above and behind the
+  model under a Revisions | Buildings tab.
 - It is an object in the building: walls hide it and block pressing it.
 
 ### Revision arc
@@ -75,8 +76,10 @@ See `vr-controls.svg` for the full mapping.
 - Each card shows a title and age, and the current version is marked. Long
   histories scroll sideways.
 - Selecting a card fades, swaps and keeps position. The arc stays open for A/B
-  comparison, and closes only from the station's Close button.
-- The station's Buildings button swaps the cards for the list of buildings.
+  comparison, and closes only from Close on the table's lip.
+- The tab above the cards swaps them for the list of buildings and back.
+- The wrist panel steps to the previous or next revision too, so comparing
+  doesn't need the station.
 
 ### Mini model (world-in-miniature)
 

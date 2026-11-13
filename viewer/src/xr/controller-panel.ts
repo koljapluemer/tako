@@ -2,19 +2,24 @@ import * as THREE from 'three';
 import { CanvasPanel } from './panel';
 
 export type Tool = 'pointer' | 'spray';
-export type PanelButton = 'message' | 'go' | 'pointer' | 'spray' | 'highlight-on' | 'highlight-off';
+export type PanelButton = 'message' | 'go' | 'rev-prev' | 'rev-next' | 'pointer' | 'spray' | 'highlight-on' | 'highlight-off';
+/** The revision on screen, and whether there is one either side of it. */
+export type RevisionRow = { title: string; detail: string; prev: boolean; next: boolean };
 
 const WIDTH = 0.15;
-const HEIGHT = 0.15;
+const HEIGHT = 0.18;
 const PIXELS_PER_METRE = 3200;
 /** Row boundaries, as fractions of the height from the top. */
-const MESSAGE_END = 0.42;
-const COMPASS_END = 0.62;
-const TOOL_END = 0.81;
+const MESSAGE_END = 0.36;
+const COMPASS_END = 0.52;
+const REVISION_END = 0.68;
+const TOOL_END = 0.84;
+/** Width of each revision arrow, as a fraction of the panel. */
+const ARROW = 0.2;
 const LABEL = 0.34;
 const SPLIT = (1 + LABEL) / 2;
 /** Above the controller, tilted back towards the user's eyes; tune on the headset. */
-const OFFSET = new THREE.Vector3(0, 0.09, 0.01);
+const OFFSET = new THREE.Vector3(0, 0.1, 0);
 const TILT = -Math.PI / 4;
 const MESSAGE_FONT = '500 30px system-ui, sans-serif';
 const MESSAGE_LINE = 38;
@@ -31,6 +36,7 @@ export function buttonAt(u: number, v: number): PanelButton | null {
   if (u < 0 || u > 1 || v < 0 || v > 1) return null;
   if (v < MESSAGE_END) return 'message';
   if (v < COMPASS_END) return 'go';
+  if (v < REVISION_END) return u < ARROW ? 'rev-prev' : u > 1 - ARROW ? 'rev-next' : null;
   if (u < LABEL) return null;
   if (v < TOOL_END) return u < SPLIT ? 'pointer' : 'spray';
   return u < SPLIT ? 'highlight-on' : 'highlight-off';
@@ -73,7 +79,7 @@ const right = new THREE.Vector3();
 
 /**
  * The panel on the left controller, read like a wristwatch: the agent's latest message, a compass to the latest change,
- * the tool, and the change highlight. Anchored to the hand, so it never trails behind the head.
+ * stepping between revisions, the tool, and the change highlight. Anchored to the hand, so it never trails behind the head.
  */
 export class ControllerPanel {
   private panel = new CanvasPanel(WIDTH, HEIGHT, { pixelsPerMetre: PIXELS_PER_METRE });
@@ -83,6 +89,7 @@ export class ControllerPanel {
     highlight: true,
     message: null as { text: string; busy: boolean } | null,
     distance: null as string | null,
+    revision: null as RevisionRow | null,
     hovered: null as PanelButton | null,
   };
   private drawn = '';
@@ -129,8 +136,18 @@ export class ControllerPanel {
     this.draw();
   }
 
+  setRevision(revision: RevisionRow | null) {
+    this.state.revision = revision;
+    this.draw();
+  }
+
   get messageBusy() {
     return this.state.message?.busy ?? false;
+  }
+
+  private revisionEnabled(button: 'rev-prev' | 'rev-next') {
+    const { revision } = this.state;
+    return revision != null && (button === 'rev-prev' ? revision.prev : revision.next);
   }
 
   private buttonOn(ray: THREE.Ray): PanelButton | null {
@@ -146,6 +163,8 @@ export class ControllerPanel {
       if (this.state.message && !this.state.message.busy) this.setMessage(null);
     } else if (button === 'go') {
       if (this.state.distance != null) this.onButton(button);
+    } else if (button === 'rev-prev' || button === 'rev-next') {
+      if (this.revisionEnabled(button)) this.onButton(button);
     } else if (button) this.onButton(button);
     return true;
   }
@@ -172,7 +191,7 @@ export class ControllerPanel {
   }
 
   private draw() {
-    const { tool, highlight, message, distance, hovered } = this.state;
+    const { tool, highlight, message, distance, revision, hovered } = this.state;
     const key = JSON.stringify(this.state);
     if (key === this.drawn) return;
     this.drawn = key;
@@ -245,10 +264,38 @@ export class ControllerPanel {
       ctx.textAlign = 'left';
       ctx.fillText(text, 2 * pad, (y0 + y1) / 2, w * LABEL - 3 * pad);
     };
+    // Revisions: step back and forth from where you stand, to compare.
+    const r1 = REVISION_END * h;
+    const arrow = (id: 'rev-prev' | 'rev-next', glyph: string, x0: number, x1: number) => {
+      const enabled = this.revisionEnabled(id);
+      button(x0, x1, c1, r1, idle(id, enabled));
+      ctx.fillStyle = enabled ? '#fff' : 'rgba(255,255,255,0.2)';
+      ctx.font = '600 44px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(glyph, (x0 + x1) / 2, (c1 + r1) / 2);
+    };
+    arrow('rev-prev', '‹', 0, w * ARROW);
+    arrow('rev-next', '›', w * (1 - ARROW), w);
+    const middle = w / 2;
+    const room = w * (1 - 2 * ARROW) - 2 * pad;
+    ctx.textAlign = 'center';
+    if (revision) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '600 28px system-ui, sans-serif';
+      ctx.fillText(revision.title, middle, c1 + (r1 - c1) * 0.36, room);
+      ctx.fillStyle = revision.next ? 'rgba(255,255,255,0.6)' : '#35d0ff';
+      ctx.font = '500 24px system-ui, sans-serif';
+      ctx.fillText(revision.detail, middle, c1 + (r1 - c1) * 0.72, room);
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = '500 28px system-ui, sans-serif';
+      ctx.fillText('No revisions', middle, (c1 + r1) / 2, room);
+    }
+
     const t1 = TOOL_END * h;
-    label('Tool', c1, t1);
-    choice('pointer', 'Pointer', w * LABEL, w * SPLIT, c1, t1, tool === 'pointer');
-    choice('spray', 'Spray', w * SPLIT, w, c1, t1, tool === 'spray');
+    label('Tool', r1, t1);
+    choice('pointer', 'Pointer', w * LABEL, w * SPLIT, r1, t1, tool === 'pointer');
+    choice('spray', 'Spray', w * SPLIT, w, r1, t1, tool === 'spray');
     label('Highlight', t1, h);
     choice('highlight-on', 'On', w * LABEL, w * SPLIT, t1, h, highlight);
     choice('highlight-off', 'Off', w * SPLIT, w, t1, h, !highlight);
