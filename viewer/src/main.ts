@@ -10,6 +10,7 @@ import { VoiceAgent } from './voice-agent';
 import { fetchSample, SAMPLES, type Sample } from './samples';
 import { ModelCache, type VersionSource } from './versions';
 import { XRWalk } from './xr/session';
+import { ChangeHighlight, highlightMaterial } from './change-highlight';
 
 const statusEl = document.getElementById('status')!;
 const setStatus = (msg: string) => (statusEl.textContent = msg);
@@ -42,11 +43,14 @@ window.addEventListener('resize', () => {
 });
 
 const xr = new XRWalk(renderer, scene, camera);
+xr.onHighlight = (on) => changes.setEnabled(on);
+xr.onChangeSeen = () => changes.release(SEEN_HIGHLIGHT_MS);
 xr.onExit = (reframe) => {
   if (reframe && current) frameObject(current.group);
 };
 
 renderer.setAnimationLoop(() => {
+  changes.update(performance.now(), current?.group ?? null);
   if (xr.presenting) xr.update();
   else controls.update();
   renderer.render(scene, camera);
@@ -66,9 +70,11 @@ function frameObject(obj: THREE.Object3D) {
 // --- live reload + change highlighting ------------------------------------
 type ModelChange = { rev: number; summary: string; changed: number[] } | null;
 
-const highlightMat = new THREE.MeshLambertMaterial({
-  color: 0xff8a1f, emissive: 0x7a3300, side: THREE.DoubleSide,
-});
+const changes = new ChangeHighlight();
+/** How long an edit stays highlighted on the desktop; in VR it stays until the user has seen it. */
+const DESKTOP_HIGHLIGHT_MS = 6000;
+/** In VR, how long after the change comes into view. */
+const SEEN_HIGHLIGHT_MS = 3000;
 let current: LoadedModel | null = null;
 let activeDocument: DocumentSummary | null = null;
 let loading = Promise.resolve();
@@ -82,36 +88,12 @@ function disposeModel({ group, collision, nav }: LoadedModel) {
       if (o.userData.baseMaterial) mats.add(o.userData.baseMaterial as THREE.Material);
     }
   });
-  mats.forEach((m) => m !== highlightMat && m.dispose());
+  mats.forEach((m) => m !== highlightMaterial && m.dispose());
   collision.dispose();
   nav?.dispose();
 }
 
 const modelCache = new ModelCache(disposeModel);
-
-function highlight(model: THREE.Group, ids: number[]) {
-  const set = new Set(ids);
-  const hits: THREE.Mesh[] = [];
-  model.traverse((o) => {
-    if (o instanceof THREE.Mesh && set.has(o.userData.expressID)) {
-      o.userData.baseMaterial = o.material;
-      o.material = highlightMat;
-      hits.push(o);
-    }
-  });
-  // Restore after a few seconds; pulsing via emissive while it lasts.
-  const until = performance.now() + 6000;
-  const tick = () => {
-    const t = performance.now();
-    if (t > until || current?.group !== model) {
-      hits.forEach((m) => (m.material = m.userData.baseMaterial));
-      return;
-    }
-    highlightMat.emissiveIntensity = 0.6 + 0.4 * Math.sin(t / 150);
-    requestAnimationFrame(tick);
-  };
-  tick();
-}
 
 async function addNavigation(model: LoadedModel) {
   await loadNavigation(model).catch(console.warn);
@@ -143,7 +125,13 @@ function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boo
       modelCache.put(document.id, document.revision, model, model);
       if (refocus) selectionMarker.visible = false;
       if (refocus && !xr.presenting) frameObject(model.group);
-      if (change && change.changed.length) highlight(model.group, change.changed);
+      if (change && change.changed.length) {
+        const box = changes.show(model.group, change.changed, xr.presenting ? null : DESKTOP_HIGHLIGHT_MS);
+        if (box) xr.setChange(box);
+      } else if (!change) {
+        changes.clear();
+        xr.clearChange();
+      }
       // Paint on anything an edit touched is stale; undo, revision jumps and new buildings make all of it stale.
       if (change) xr.spray.dropColorsTouching(change.changed);
       else xr.spray.clear();

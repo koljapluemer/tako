@@ -60,13 +60,29 @@ Needs a building with at least two revisions on the headset.
 - [ ] Left stick forward aims a straight ray that places the station on valid floor and refuses anything else; a new one replaces the old.
 - [ ] Right stick forward teleports and the left never does; turning the right stick while aiming sets the landing direction, and only the right stick snap turns.
 - [ ] A snap turn held and swung forward does not start a teleport.
-- [ ] The left trigger presses panels and never sprays; the right trigger sprays until released, never presses or highlights a panel.
+- [ ] Either trigger presses the panel it points at. The right trigger never sprays onto a panel, and never sprays with the pointer.
+
+### Tools and the left controller panel
+- [ ] A session starts with the pointer: no can, white tip, and A does nothing.
+- [ ] The panel sits above the left controller, reads clearly when you look at your wrist and is easy to hit with the right ray, without blocking the left beam or the view. Tune `OFFSET`, `TILT` and the size (`viewer/src/xr/controller-panel.ts`).
+- [ ] With only the right controller tracked, the panel moves to it.
+- [ ] Spray shows the can on the right controller, its band in the next colour; Pointer hides it again.
+- [ ] Highlight Off restores the normal materials straight away, and a following edit is not highlighted. Leaving VR turns the highlight back on for the desktop.
+
+### Agent messages and the latest change
+- [ ] Agent messages appear at the top of the wrist panel, with a blue bar while it works, wrapping onto up to four lines. Pressing a finished message clears it; a working one can't be cleared.
+- [ ] A finished reply stays after the model reloads; a "Loading…" message goes once the model is in.
+- [ ] Both controllers buzz when the agent finishes or fails.
+- [ ] After an edit, the compass needle points to the change as the wrist turns, and the distance counts down as you walk, naming the height difference on another level.
+- [ ] Looking at the change unobstructed for a second clears the compass ("No new change") and ends the highlight 3 s later. Looking at it through a wall doesn't count.
+- [ ] Pressing the compass row teleports to a walkable spot a few metres away, facing the change with nothing in between, on the user's side where possible.
+- [ ] Undo, a revision jump or a new building clears the compass.
 
 ### Spray paint
 - [ ] Paint lands on walls, floors, windows, doors and furniture, with no visible flicker. It reads well at room distance.
 - [ ] Frame rate holds while spraying, including near many doors. If not, raise `SPRAY_INTERVAL_MS` (`viewer/src/xr/session.ts`).
 - [ ] The right controller's tip shows the next colour; a pause changes it. Tune `GROUP_PAUSE_MS` (`viewer/src/xr/paint-log.ts`) if marking several things around a room splits into too many colours.
-- [ ] Tapping A undoes one stroke with no ring flash; holding A fills the ring and deletes all paint once; X still returns to the start.
+- [ ] Holding the can, tapping A undoes one stroke with no ring flash; holding A fills the ring and deletes all paint once; X still returns to the start.
 - [ ] Six colours in use refuses a seventh with a notice.
 - [ ] After a voice edit, colours on the changed elements go and the others stay in place, even if the origin shifts. Undo, a revision jump or a new building clears all paint.
 - [ ] Holding X fills the ring and returns once to the exact spot you started at, even if the navmesh finished after you entered; releasing early cancels, and it stays put while still held. Tune `RETURN_HOLD_MS` (`viewer/src/xr/session.ts`) and the ring size (`viewer/src/xr/hold-ring.ts`).

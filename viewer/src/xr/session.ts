@@ -5,17 +5,19 @@ import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
+import { changeView } from './change-view';
+import { ControllerPanel, type PanelButton, type Tool } from './controller-panel';
 import { Fade } from './fade';
 import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
 import { Hold, TapHold } from './hold';
 import { HoldRing } from './hold-ring';
 import { Hud } from './hud';
 import { navReach, spawnLanding, storeyLandings } from './landing';
-import { Notice } from './notice';
 import { PALETTE, type Stroke, type Vec3 } from './paint-log';
 import { handOf, headYaw, lowerFaceButtonDown, pointerRay, stick, upperFaceButtonDown, type Pointer } from './pointer';
 import { Spawn, type Spot } from './spawn';
 import { Spray } from './spray';
+import { SprayCan } from './spray-can';
 import { Station } from './station';
 import { Walking } from './walking';
 
@@ -56,6 +58,12 @@ const SPRAY_JITTER = Math.tan(THREE.MathUtils.degToRad(1.5));
 /** Taps shouldn't flash the ring. */
 const PAINT_RING_DELAY = 150 / RETURN_HOLD_MS;
 const NO_COLOUR_TIP = 0x808080;
+/** A change counts as seen once it has been in view, unblocked and this close, for this long. */
+const SEEN_ANGLE = Math.cos(THREE.MathUtils.degToRad(30));
+const SEEN_DISTANCE = 8;
+const SEEN_MS = 1000;
+/** Lets a ray graze the changed element's own surface before its bounds start. */
+const SIGHT_SLACK = 0.1;
 
 export class XRWalk {
   readonly rig = new THREE.Group();
@@ -71,7 +79,6 @@ export class XRWalk {
   private stickAims = new Map<Pointer, FloorAim>();
   /** Sticks that have recentred since their last push. */
   private sticksAtRest = new WeakSet<Pointer>();
-  private notice: Notice;
   private station: Station;
   private hud: Hud | null;
   private pointers: Pointer[] = [];
@@ -86,6 +93,19 @@ export class XRWalk {
   private spraying = new Map<Pointer, { stroke: Stroke; next: number }>();
   private paintButton = new TapHold(RETURN_HOLD_MS);
   private tips: THREE.MeshBasicMaterial[] = [];
+  private cans: SprayCan[] = [];
+  /** What the right trigger does when it isn't pressing a panel. */
+  private tool: Tool = 'pointer';
+  private controllerPanel = new ControllerPanel();
+  /** Kept between sessions; only applies while in VR. */
+  private highlight = true;
+  /** Called when the change highlight is switched on or off. */
+  onHighlight: (on: boolean) => void = () => {};
+  /** The latest edit's bounds, until the user has had a look at it. */
+  private change: { box: THREE.Box3; centre: THREE.Vector3; inViewSince: number | null } | null = null;
+  /** Called once the latest change has been seen. */
+  onChangeSeen: () => void = () => {};
+  private messageBusy = false;
   /** What a ray hits in the current model. */
   pickAt: ((ray: THREE.Ray) => { point: THREE.Vector3; normal: THREE.Vector3; expressID: number } | null) | null = null;
   /** The camera only carries the headset's pose once a frame has been rendered in the session. */
@@ -109,7 +129,7 @@ export class XRWalk {
     const floorY = () => this.walking.floorY;
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
     this.placement = new FloorAim(scene, camera, floorY, { path: straightPath, facing: false, stand: false });
-    this.notice = new Notice(scene, camera);
+    this.controllerPanel.onButton = (button) => this.onPanelButton(button);
     this.station = new Station(scene);
     this.station.onPin = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
@@ -136,6 +156,9 @@ export class XRWalk {
     this.tips.push(tipMaterial);
     visual.visible = false;
     ray.add(visual);
+    const can = new SprayCan();
+    this.cans.push(can);
+    ray.add(can.group);
 
     grip.add(controllerModels.createControllerModel(grip));
     const hand = this.renderer.xr.getHand(index) as unknown as THREE.Group & { joints: Record<string, THREE.Group | undefined> };
@@ -167,16 +190,29 @@ export class XRWalk {
     events.addEventListener('squeezeend', () => this.station.grabEnd(index));
   }
 
-  /** The right controller's trigger sprays; everything else presses panels. */
+  /** The right controller sprays while it holds the can; every trigger presses panels first. */
   private sprays(pointer: Pointer) {
-    return !pointer.source?.hand && pointer.source?.targetRayMode === 'tracked-pointer' && handOf(pointer) === 'right';
+    return this.tool === 'spray' && isController(pointer) && handOf(pointer) === 'right';
   }
 
   private press(pointer: Pointer) {
-    if (this.sprays(pointer)) return this.startSpray(pointer);
     const ray = pointerRay(pointer, new THREE.Ray());
     if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return;
-    if (!this.notice.press(ray)) this.station.press(ray, pointer.index);
+    if (this.controllerPanel.press(ray) || this.station.press(ray, pointer.index)) return;
+    if (this.sprays(pointer)) this.startSpray(pointer);
+  }
+
+  private onPanelButton(button: PanelButton) {
+    if (button === 'pointer' || button === 'spray') {
+      this.tool = button;
+      this.controllerPanel.setTool(button);
+    } else if (button === 'highlight-on' || button === 'highlight-off') {
+      this.highlight = button === 'highlight-on';
+      this.controllerPanel.setHighlight(this.highlight);
+      this.onHighlight(this.highlight);
+    } else {
+      this.goToChange();
+    }
   }
 
   private startSpray(pointer: Pointer) {
@@ -219,9 +255,13 @@ export class XRWalk {
     const { log } = this.spray;
     const next = log.nextColor(now);
     const tint = next == null ? NO_COLOUR_TIP : PALETTE[next].hex;
-    for (const p of this.pointers) this.tips[p.index].color.setHex(this.sprays(p) ? tint : 0xffffff);
+    for (const p of this.pointers) {
+      this.tips[p.index].color.setHex(this.sprays(p) ? tint : 0xffffff);
+      this.cans[p.index].update(this.sprays(p) && p.ray.visible, tint);
+    }
 
-    const pointer = this.pointers.find((p) => handOf(p) === 'right' && lowerFaceButtonDown(p.source));
+    // A only means something while the can is held.
+    const pointer = this.pointers.find((p) => this.sprays(p) && lowerFaceButtonDown(p.source));
     const blocked = this.locked || this.teleport.aiming || this.placement.aiming || this.spraying.size > 0 || log.dotCount === 0;
     const { progress, tap } = this.paintButton.update(pointer != null, now, blocked);
     if (progress === 1) {
@@ -275,6 +315,9 @@ export class XRWalk {
     this.sessionFrames = 0;
     this.fade.set('start', 1);
     this.spaceReady = false;
+    this.tool = 'pointer';
+    this.controllerPanel.setTool(this.tool);
+    this.onHighlight(this.highlight);
     void this.useBoundedFloor();
   }
 
@@ -304,8 +347,15 @@ export class XRWalk {
     this.returnHold.reset();
     this.returnRing.set(0); // the camera goes back to the desktop view with its children
     this.walking.restoreDoors();
-    this.notice.close();
+    this.controllerPanel.setMessage(null);
+    this.messageBusy = false;
     this.station.close();
+    this.controllerPanel.attach(null);
+    // Unseen from the headset, but the desktop shouldn't keep it highlighted forever.
+    if (this.change) this.onChangeSeen();
+    this.clearChange();
+    // The setting is the headset's; the desktop always highlights.
+    this.onHighlight(true);
     this.rig.position.set(0, 0, 0);
     this.rig.rotation.set(0, 0, 0);
     camera.position.copy(desktop.position);
@@ -330,9 +380,65 @@ export class XRWalk {
     this.station.source = source;
   }
 
-  /** The DOM status line can't be seen from inside the headset. */
+  /** The DOM status line can't be seen from inside the headset, so messages go on the wrist. Work finishing is felt in both hands. */
   notify(text: string, busy: boolean) {
-    if (this.presenting) this.notice.show(text, busy);
+    if (!this.presenting) return;
+    if (this.messageBusy && !busy) for (const p of this.pointers) pulse(p.source, 0.6, 80);
+    this.messageBusy = busy;
+    this.controllerPanel.setMessage(text, busy);
+  }
+
+  // --- the latest change ---------------------------------------------------------
+  /** Points the user to what the latest edit changed, until they have seen it. */
+  setChange(box: THREE.Box3) {
+    if (!this.presenting) return;
+    this.change = { box: box.clone(), centre: box.getCenter(new THREE.Vector3()), inViewSince: null };
+  }
+
+  clearChange() {
+    this.change = null;
+  }
+
+  /** True when nothing in the building stands between `from` and the change. */
+  private seesChange(from: THREE.Vector3, to: THREE.Vector3, box: THREE.Box3) {
+    const ray = new THREE.Ray(from.clone(), to.clone().sub(from).normalize());
+    const entry = ray.intersectBox(box, new THREE.Vector3());
+    const reach = entry ? entry.distanceTo(from) : from.distanceTo(to);
+    const hit = this.model?.collision.raycast(ray, reach);
+    return !hit || hit.distance >= reach - SIGHT_SLACK;
+  }
+
+  private updateChange(now: number) {
+    const { change } = this;
+    if (!change || this.locked) return;
+    this.camera.getWorldPosition(head);
+    this.camera.getWorldDirection(direction);
+    const toChange = change.centre.clone().sub(head);
+    const distance = toChange.length();
+    const inView = distance < SEEN_DISTANCE
+      && (change.box.containsPoint(head) || toChange.normalize().dot(direction) > SEEN_ANGLE)
+      && this.seesChange(head, change.centre, change.box);
+    if (!inView) change.inViewSince = null;
+    else if (change.inViewSince == null) change.inViewSince = now;
+    else if (now - change.inViewSince > SEEN_MS) {
+      this.clearChange();
+      this.onChangeSeen();
+    }
+  }
+
+  private goToChange() {
+    const { change, model } = this;
+    if (!change || !model) return;
+    const { box, centre } = change;
+    const above = new THREE.Vector3(centre.x, box.min.y + 0.5, centre.z);
+    const floorY = model.collision.raycastFloor(new THREE.Ray(above, DOWN), MAX_FLOOR_SEARCH)?.point.y ?? box.min.y;
+    this.camera.getWorldPosition(head);
+    const view = changeView(centre, floorY, head, {
+      nearest: (point, max) => model.nav?.nearest(point, max) ?? null,
+      clear: (from, to) => this.seesChange(from, to, box),
+    });
+    if (view) void this.travel(view);
+    else this.notify('No place to stand near the change', false);
   }
 
   // --- moving the user ------------------------------------------------------
@@ -420,7 +526,9 @@ export class XRWalk {
     if (this.locked) return;
     this.locked = true;
     await this.fade.to('teleport', 1, 90);
-    if (this.presenting) move();
+    if (this.presenting) {
+      move();
+    }
     pulse(pointer?.source ?? null);
     await this.fade.to('teleport', 0, 120);
     this.locked = false;
@@ -447,9 +555,13 @@ export class XRWalk {
     this.walking.setModel(model.collision, model.doorCells);
     this.station.setCollision(model.collision);
     const landings = storeyLandings(model.collision, model.storeys, model.terrain);
-    if (switched) this.spawn.release();
+    if (switched) {
+      this.spawn.release();
+      this.clearChange();
+    }
     this.spawn.offer(spawnLanding(landings));
-    this.notice.close();
+    // A "Loading…" message is done once the model is in; a finished reply stays readable.
+    if (this.controllerPanel.messageBusy) this.controllerPanel.setMessage(null);
     this.station.setNavigation(null);
     if (model.nav) this.setNavigation(model); // a cached revision already has one
 
@@ -471,6 +583,8 @@ export class XRWalk {
       this.spawn.translate(shift);
       this.station.translate(shift);
       this.spray.translate(shift);
+      this.change?.box.translate(shift);
+      this.change?.centre.add(shift);
       this.walking.resetTracking(this.rig.position.y);
       this.walking.lastValid?.add(shift);
     }
@@ -583,7 +697,12 @@ export class XRWalk {
     this.updateSpray(now);
     this.updateTalk();
     this.updateSnapTurn();
-    const rays = this.pointers.filter((p) => p.source && p.ray.visible && !this.sprays(p)).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
+    this.updateChange(now);
+    const rays = this.pointers.filter((p) => p.source && p.ray.visible && !this.spraying.has(p)).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
+    // On the left controller; on the right one only if it is the only controller tracked.
+    const held = (hand: 'left' | 'right') => this.pointers.find((p) => isController(p) && handOf(p) === hand && p.grip.visible);
+    this.controllerPanel.attach((held('left') ?? held('right'))?.grip ?? null);
+    this.controllerPanel.update(rays.map(({ ray }) => ray), this.change?.centre ?? null);
     this.camera.getWorldPosition(head);
     this.camera.getWorldDirection(direction);
     this.station.update({
@@ -599,10 +718,15 @@ export class XRWalk {
   }
 }
 
-function pulse(source: XRInputSource | null) {
+/** A physical controller rather than a tracked hand or a transient (gaze or screen) pointer. */
+function isController(pointer: Pointer) {
+  return !pointer.source?.hand && pointer.source?.targetRayMode === 'tracked-pointer';
+}
+
+function pulse(source: XRInputSource | null, intensity = 0.4, ms = 40) {
   const pad = source?.gamepad as (Gamepad & { hapticActuators?: Array<{ pulse?: (v: number, ms: number) => unknown }> }) | undefined;
   try {
-    pad?.hapticActuators?.[0]?.pulse?.(0.4, 40);
+    pad?.hapticActuators?.[0]?.pulse?.(intensity, ms);
   } catch {
     // Haptics are a nicety; devices that refuse them lose nothing.
   }
