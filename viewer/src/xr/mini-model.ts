@@ -157,6 +157,17 @@ export class MiniModel {
     this.building.scale.setScalar(this.scale);
     this.building.position.copy(this.origin).multiplyScalar(-this.scale);
 
+    // Faded, nothing writes depth, so draw order decides what covers what. Left to
+    // three's per-frame distance sort, overlapping meshes swap places as the head moves
+    // and pop in and out. A fixed bottom-up order can't flip, and is back to front
+    // for the usual look down at the model.
+    const height = (mesh: THREE.Mesh) => {
+      const { min, max } = mesh.geometry.boundingBox!;
+      return min.y + max.y;
+    };
+    const ordered = [...meshes].sort((a, b) => height(a) - height(b));
+    const rank = new Map(ordered.map((mesh, i) => [mesh, i / ordered.length]));
+
     const clones = new Map<THREE.Material, THREE.Material>();
     for (const source of meshes) {
       // A change highlight may be showing on the mesh right now.
@@ -170,8 +181,9 @@ export class MiniModel {
         this.shells.push({ material: clone, opacity: original.opacity });
       }
       const mesh = new THREE.Mesh(source.geometry, clone);
-      // Glass draws over everything solid in the model.
-      mesh.renderOrder = original.opacity < 1 ? RENDER_ORDER : RENDER_ORDER - 1;
+      // Glass draws over everything solid in the model; within each, the fixed order.
+      // The fraction stays below the next step, so pins and the marker still come after.
+      mesh.renderOrder = (original.opacity < 1 ? RENDER_ORDER : RENDER_ORDER - 1) + rank.get(source)! * 0.5;
       this.building.add(mesh);
     }
     this.setOpacity(this.opacityValue);

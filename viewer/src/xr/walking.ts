@@ -181,8 +181,13 @@ export class Walking {
   private setDoorOpacity({ material, baseOpacity }: DoorInfo, opacity: number) {
     if (material.opacity === opacity) return;
     material.opacity = opacity;
-    material.transparent = baseOpacity < 1 || opacity < 1;
-    material.depthWrite = !material.transparent;
+    const transparent = baseOpacity < 1 || opacity < 1;
+    if (material.transparent !== transparent) {
+      material.transparent = transparent;
+      // `transparent` is compiled into the shader; without this an opaque door keeps alpha 1.
+      material.needsUpdate = true;
+    }
+    material.depthWrite = !transparent;
   }
 
   restoreDoors() {
