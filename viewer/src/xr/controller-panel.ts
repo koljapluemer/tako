@@ -102,7 +102,9 @@ export class ControllerPanel {
     const shape = new THREE.Shape([new THREE.Vector2(0, size), new THREE.Vector2(size * 0.6, -size * 0.7), new THREE.Vector2(0, -size * 0.35), new THREE.Vector2(-size * 0.6, -size * 0.7)]);
     this.needle = new THREE.Mesh(
       new THREE.ShapeGeometry(shape),
-      new THREE.MeshBasicMaterial({ color: 0xff8a1f, side: THREE.DoubleSide, depthTest: false, depthWrite: false }),
+      // Keep this in the transparent render pass with the canvas panel; otherwise the
+      // panel is composited afterward and its dark background washes the needle out.
+      new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false }),
     );
     this.needle.position.set((DIAL_U - 0.5) * WIDTH, (0.5 - DIAL_V) * HEIGHT, 0.001);
     this.needle.renderOrder = this.panel.mesh.renderOrder + 1;
