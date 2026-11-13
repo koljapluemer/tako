@@ -111,6 +111,8 @@ export class FloorAim {
   reach: Reach | null = null;
 
   commit: (destination: Destination, pointer: Pointer) => void = () => {};
+  /** Released while aiming somewhere it can't land. */
+  onReject: (pointer: Pointer) => void = () => {};
 
   constructor(scene: THREE.Scene, private camera: THREE.Camera, private floorY: () => number, private options: FloorAimOptions) {
     const geometry = new THREE.BufferGeometry();
@@ -148,6 +150,7 @@ export class FloorAim {
     const { destination, yaw } = this;
     this.cancel();
     if (destination?.valid) this.commit({ point: destination.point, yaw }, pointer);
+    else this.onReject(pointer);
   }
 
   abandon(pointer: Pointer) {

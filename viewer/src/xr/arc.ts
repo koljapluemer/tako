@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Sample } from '../samples';
 import { formatAge, type Version, type VersionSource } from '../versions';
+import type { FeedbackSink } from './feedback';
 import { CanvasPanel, type LimitedRay } from './panel';
 
 export const ARC_RADIUS = 1.25;
@@ -32,6 +33,7 @@ export class Arc {
   private samples: Sample[] = [];
   private openSample: (sample: Sample) => void = () => {};
   source: VersionSource | null = null;
+  onFeedback: FeedbackSink = () => {};
 
   constructor(private scene: THREE.Scene) {
     scene.add(this.tab.mesh);
@@ -239,27 +241,40 @@ export class Arc {
     if (!this.opened) return false;
     const tab = this.tabAt(pick);
     if (tab) {
-      if (tab !== this.mode) void (tab === 'versions' ? this.showVersions() : this.showBuildings());
+      if (tab !== this.mode) {
+        this.onFeedback('press', this.tab.mesh.position);
+        void (tab === 'versions' ? this.showVersions() : this.showBuildings());
+      } else this.onFeedback('disabled', this.tab.mesh.position);
       return true;
     }
     const slot = this.slotAt(pick);
     if (slot < 0) return false;
-    this.cards[slot].item.run();
+    const { panel, item } = this.cards[slot];
+    this.onFeedback(item.current ? 'disabled' : 'press', panel.mesh.position);
+    item.run();
     return true;
   }
 
-  update(picks: LimitedRay[]) {
-    if (!this.opened) return;
+  /** Returns what each pick is on: `tab:<mode>`, `card:<slot>`, or null. */
+  update(picks: LimitedRay[]): Array<string | null> {
+    if (!this.opened) return picks.map(() => null);
+    const keys = picks.map((pick) => {
+      const tabHit = this.tabAt(pick);
+      if (tabHit) return `tab:${tabHit}`;
+      const card = this.slotAt(pick);
+      return card >= 0 ? `card:${card}` : null;
+    });
     const tab = picks.reduce<'versions' | 'buildings' | null>((found, pick) => found ?? this.tabAt(pick), null);
     if (tab !== this.tabHovered) {
       this.tabHovered = tab;
       this.drawTab();
     }
     const slot = picks.reduce((found, pick) => (found >= 0 ? found : this.slotAt(pick)), -1);
-    if (slot === this.hovered) return;
+    if (slot === this.hovered) return keys;
     const before = this.hovered;
     this.hovered = slot;
     if (before >= 0) this.draw(before);
     if (slot >= 0) this.draw(slot);
+    return keys;
   }
 }

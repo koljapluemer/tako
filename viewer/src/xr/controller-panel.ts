@@ -94,6 +94,8 @@ export class ControllerPanel {
   };
   private drawn = '';
   onButton: (button: PanelButton) => void = () => {};
+  /** A press on the panel that did something without calling `onButton`, or that hit a disabled button. */
+  onFeedback: (cue: 'press' | 'disabled') => void = () => {};
 
   constructor() {
     this.panel.mesh.position.copy(OFFSET);
@@ -143,6 +145,11 @@ export class ControllerPanel {
     this.draw();
   }
 
+  /** Where the panel is, or null while it is hidden. */
+  worldPosition(out: THREE.Vector3): THREE.Vector3 | null {
+    return this.panel.mesh.visible ? this.panel.mesh.getWorldPosition(out) : null;
+  }
+
   get messageBusy() {
     return this.state.message?.busy ?? false;
   }
@@ -162,19 +169,24 @@ export class ControllerPanel {
     if (!this.panel.hit(ray)) return false;
     const button = this.buttonOn(ray);
     if (button === 'message') {
-      if (this.state.message && !this.state.message.busy) this.setMessage(null);
+      if (this.state.message && !this.state.message.busy) {
+        this.setMessage(null);
+        this.onFeedback('press');
+      } else this.onFeedback('disabled');
     } else if (button === 'go') {
       if (this.state.distance != null) this.onButton(button);
+      else this.onFeedback('disabled');
     } else if (button === 'rev-prev' || button === 'rev-next') {
       if (this.revisionEnabled(button)) this.onButton(button);
+      else this.onFeedback('disabled');
     } else if (button) this.onButton(button);
     return true;
   }
 
-  /** Call every frame, after the controller has moved. `target` is the latest change, or null. */
-  update(rays: THREE.Ray[], target: THREE.Vector3 | null) {
+  /** Call every frame, after the controller has moved. `target` is the latest change, or null. Returns the button under each ray. */
+  update(rays: THREE.Ray[], target: THREE.Vector3 | null): Array<PanelButton | null> {
     const { mesh } = this.panel;
-    if (!mesh.visible) return;
+    if (!mesh.visible) return rays.map(() => null);
     this.needle.visible = target != null;
     let distance: string | null = null;
     if (target) {
@@ -188,8 +200,10 @@ export class ControllerPanel {
       distance = distanceLabel(toTarget.length(), rise);
     }
     this.state.distance = distance;
-    this.state.hovered = rays.map((ray) => this.buttonOn(ray)).find((b) => b != null) ?? null;
+    const hovered = rays.map((ray) => this.buttonOn(ray));
+    this.state.hovered = hovered.find((b) => b != null) ?? null;
     this.draw();
+    return hovered;
   }
 
   private draw() {

@@ -93,6 +93,16 @@ Needs a building with at least two revisions on the headset.
 - [ ] Walls hide the station and stop presses reaching it.
 - [ ] Close works, the Revisions | Buildings tab swaps the cards, a building card switches building, and a revision swap keeps the station in place.
 
+### Sound and haptics
+See [vr-sound.md](vr-sound.md). Tune with `/sounds.html` in Quest Browser, in a second tab next to the VR session.
+- [ ] Sounds and vibrations both arrive, and the volume feels right next to the system UI. Tune `master` in `DEFAULT_TUNING` (`viewer/src/xr/audio.ts`).
+- [ ] Pointing at a button, card, lip control or pin vibrates once and never makes a sound; sweeping across a row of cards does not rattle.
+- [ ] The spray hiss comes from the can as it moves, gets louder with the trigger, and stops cleanly on release, when aiming a teleport, and on leaving VR.
+- [ ] The opacity slider ticks without becoming a buzz.
+- [ ] The X and A hold tones rise with the ring and stop as it completes or is released.
+- [ ] Saying nothing after the mic sound gives "I did not catch that": the mic sound is not transcribed.
+- [ ] During a multi-step voice edit, progress stays quiet; done and error are clearly different.
+
 ### Finish
 - [ ] Bounded-floor works where available, with no offset compared with local-floor.
 - [ ] A session starts at an entrance on models that have one.

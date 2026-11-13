@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { stepsCrossed, type FeedbackSink } from './feedback';
 import type { MiniModel } from './mini-model';
 import { tableMaterial } from './pedestal';
 import { CanvasPanel, type LimitedRay } from './panel';
@@ -25,6 +26,8 @@ const SLAB_DEPTH = 0.012;
 const SLAB_MARGIN = 0.006;
 const PIXELS_PER_METRE = 2000;
 
+/** Opacity ticks at every tenth. */
+const SLIDER_STEP = 0.1;
 const COLOR = { active: 0x35d0ff, hover: 0xffffff, off: 0x9aa4ae };
 
 export type Row = 'opacity' | 'pins';
@@ -81,6 +84,7 @@ export class MiniControls {
   private normal = new THREE.Vector3();
   private closeHovered = false;
   onClose: () => void = () => {};
+  onFeedback: FeedbackSink = () => {};
 
   constructor(scene: THREE.Scene, private mini: MiniModel) {
     const slab = new THREE.Mesh(new THREE.BoxGeometry(PANEL_W + 2 * SLAB_MARGIN, PANEL_H + 2 * SLAB_MARGIN, SLAB_DEPTH), tableMaterial);
@@ -198,6 +202,7 @@ export class MiniControls {
   }
 
   private setOpacity(value: number) {
+    if (stepsCrossed(this.mini.opacity, value, SLIDER_STEP) > 0) this.onFeedback('tick', this.panel.mesh.getWorldPosition(new THREE.Vector3()));
     this.mini.setOpacity(value);
     this.sync();
   }
@@ -207,17 +212,21 @@ export class MiniControls {
     const hit = this.rowHit(pick);
     if (!hit) return false;
     const { row, x } = hit;
+    const at = this.panel.mesh.getWorldPosition(new THREE.Vector3());
     if (hit.close) {
+      this.onFeedback('press', at);
       this.onClose();
       return true;
     }
     if (!row || [...this.captured.values()].includes(row)) return true;
     if (row === 'pins') {
       this.mini.setPinsVisible(!this.mini.pinsVisible);
+      this.onFeedback(this.mini.pinsVisible ? 'toggleOn' : 'toggleOff', at);
       this.sync();
       return true;
     }
     this.captured.set(id, row);
+    this.onFeedback('press', at);
     this.setOpacity(trackValue(x));
     return true;
   }
@@ -236,18 +245,20 @@ export class MiniControls {
     this.setOpacity(trackValue(this.hitPoint.x + PANEL_W / 2));
   }
 
-  update(rays: Array<{ id: number; ray: THREE.Ray }>, picks: LimitedRay[]) {
-    if (!this.panel.mesh.visible) return;
+  /** Returns what each pick is on: `row:<row>`, `close`, or null. */
+  update(rays: Array<{ id: number; ray: THREE.Ray }>, picks: LimitedRay[]): Array<string | null> {
+    if (!this.panel.mesh.visible) return picks.map(() => null);
     for (const { id, ray } of rays) {
       if (this.captured.has(id)) this.drag(ray);
     }
     const hovered = new Set<Row>(this.captured.values());
     let close = false;
-    for (const pick of picks) {
+    const keys = picks.map((pick) => {
       const hit = this.rowHit(pick);
       if (hit?.row) hovered.add(hit.row);
       if (hit?.close) close = true;
-    }
+      return hit?.close ? 'close' : hit?.row ? `row:${hit.row}` : null;
+    });
     this.setCloseHovered(close);
     for (const row of ROWS) {
       const base = row === 'pins' && !this.mini.pinsVisible ? COLOR.off : COLOR.active;
@@ -255,5 +266,6 @@ export class MiniControls {
       const fill = this.fills.get(row);
       if (fill) colorOf(fill).setHex(COLOR.active);
     }
+    return keys;
   }
 }

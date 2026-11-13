@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tako sound board</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 16px; background: #1e1f22; color: #eee; font: 14px/1.4 system-ui, sans-serif; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 24px 0 8px; }
+      p { color: #aab; margin: 0 0 12px; max-width: 70ch; }
+      button, select, input { font: inherit; color: #eee; background: #2b2e33; border: 1px solid #555; border-radius: 6px; padding: 4px 8px; }
+      button:hover { background: #3a4048; }
+      .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+      .cue { border: 1px solid #3a3d42; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+      .cue-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .cue-head strong { min-width: 7em; }
+      .play { background: #24506a; border-color: #35d0ff; }
+      .layer { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 0 16px; font-size: 13px; }
+      .layer label { display: flex; gap: 3px; align-items: center; color: #aab; }
+      .layer input[type=number] { width: 5.5em; padding: 2px 4px; }
+      .kenney { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+      input[type=range] { width: 200px; padding: 0; }
+    </style>
+  </head>
+  <body>
+    <h1>tako sound board</h1>
+    <p>Dev only. Edits are saved in this browser and apply to an open VR session in the same browser straight away.
+      When a sound is right, use “Copy tuning” and paste it into <code>DEFAULT_TUNING</code> in <code>src/xr/audio.ts</code>, or give it to Claude.</p>
+    <div class="bar">
+      <label>Master <input id="master" type="range" min="0" max="1.5" step="0.05" /></label>
+      <button id="copy" type="button">Copy tuning</button>
+      <button id="reset" type="button">Reset to defaults</button>
+      <span id="note"></span>
+    </div>
+    <h2>Cues</h2>
+    <div id="cues"></div>
+    <h2>Loops</h2>
+    <div id="loops"></div>
+    <h2>Kenney files</h2>
+    <div id="kenney" class="kenney"></div>
+    <script type="module" src="/src/sound-board.ts"></script>
+  </body>
+</html>

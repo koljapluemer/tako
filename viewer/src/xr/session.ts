@@ -5,9 +5,11 @@ import type { Sample } from '../samples';
 import { formatAge, type Version, type VersionSource } from '../versions';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
+import { loadTuning, Sound, type SprayLoop } from './audio';
 import { changeView } from './change-view';
 import { ControllerPanel, type PanelButton, type Tool } from './controller-panel';
 import { Fade } from './fade';
+import { haptic, HoverTracker, Throttle, type FeedbackSink, type NoticeKind } from './feedback';
 import { ballisticPath, FloorAim, straightPath, type Destination } from './floor-aim';
 import { Hold, TapHold } from './hold';
 import { HoldRing } from './hold-ring';
@@ -60,6 +62,13 @@ const PAINT_RING_DELAY = 150 / RETURN_HOLD_MS;
 const NO_COLOUR_TIP = 0x808080;
 /** Lets a ray graze the changed element's own surface before its bounds start. */
 const SIGHT_SLACK = 0.1;
+/** Agent progress is a hint, not a ticker. */
+const PROGRESS_SOUND_MS = 4000;
+/** Progress is only heard when the wrist panel is further than this from where the user looks. */
+const PANEL_GLANCE = Math.cos(THREE.MathUtils.degToRad(35));
+/** How often a held button's vibration grows while the ring fills. */
+const HOLD_PULSE_MS = 100;
+const panelAt = new THREE.Vector3();
 
 export class XRWalk {
   readonly rig = new THREE.Group();
@@ -86,7 +95,7 @@ export class XRWalk {
   private returnHold = new Hold(RETURN_HOLD_MS);
   private returnRing: HoldRing;
   readonly spray: Spray;
-  private spraying = new Map<Pointer, { stroke: Stroke; next: number }>();
+  private spraying = new Map<Pointer, { stroke: Stroke; next: number; loop: SprayLoop | null }>();
   private paintButton = new TapHold(RETURN_HOLD_MS);
   private tips: THREE.MeshBasicMaterial[] = [];
   private cans: SprayCan[] = [];
@@ -100,6 +109,13 @@ export class XRWalk {
   /** The latest edit's bounds, until the next edit or model switch. */
   private change: { box: THREE.Box3; centre: THREE.Vector3 } | null = null;
   private messageBusy = false;
+  readonly sound = new Sound();
+  private hover = new HoverTracker();
+  private progressSound = new Throttle(PROGRESS_SOUND_MS);
+  private nextHoldPulse = 0;
+  /** The pointer whose press is being handled, so the panels' feedback is felt in that hand. */
+  private pressing: Pointer | null = null;
+  private grabbing = new Set<number>();
   private versions: VersionSource | null = null;
   /** Drops a revision list that arrives after a newer one was asked for. */
   private revisionRequest = 0;
@@ -127,14 +143,34 @@ export class XRWalk {
     this.teleport = new FloorAim(scene, camera, floorY, { path: ballisticPath, facing: true, stand: true });
     this.placement = new FloorAim(scene, camera, floorY, { path: straightPath, facing: false, stand: false });
     this.controllerPanel.onButton = (button) => this.onPanelButton(button);
+    this.controllerPanel.onFeedback = (cue) => this.feedback(cue);
     this.station = new Station(scene);
     this.station.onPin = (point) => void this.travel({ point: new THREE.Vector3(...point.position), yaw: point.yaw });
+    this.station.onFeedback = this.feedback;
+    this.station.onTip = (id, event) => haptic(this.pointers[id]?.source, event === 'armed' ? 0.25 : 0.15, event === 'armed' ? 15 : 12);
     this.hud = Hud.enabled() ? new Hud(renderer, camera) : null;
 
     this.teleport.commit = (destination, pointer) => void this.travel(destination, pointer);
-    this.placement.commit = ({ point }) => this.station.place(point, this.camera.getWorldPosition(new THREE.Vector3()));
+    this.placement.commit = ({ point }, pointer) => {
+      this.station.place(point, this.camera.getWorldPosition(new THREE.Vector3()));
+      this.sound.play('place', { at: point });
+      haptic(pointer.source);
+    };
+    for (const aim of [this.teleport, this.placement]) {
+      aim.onReject = (pointer) => {
+        this.sound.play('reject');
+        haptic(pointer.source, 0.2, 30);
+      };
+    }
 
     for (let index = 0; index < POINTER_COUNT; index++) this.addPointer(index);
+
+    // Browsers keep audio locked until a user gesture; entering VR is one.
+    const unlock = () => this.sound.unlock();
+    document.addEventListener('pointerdown', unlock, { capture: true, once: true });
+    document.addEventListener('keydown', unlock, { capture: true, once: true });
+    // The dev sound board (/sounds.html) saves tuning that applies here at once.
+    if (import.meta.env.DEV) window.addEventListener('storage', () => this.sound.retune(loadTuning()));
 
     renderer.xr.addEventListener('sessionstart', () => this.onSessionStart());
     renderer.xr.addEventListener('sessionend', () => this.onSessionEnd());
@@ -171,7 +207,7 @@ export class XRWalk {
       visual.visible = pointer.source?.targetRayMode === 'tracked-pointer';
     });
     events.addEventListener('disconnected', () => {
-      this.station.grabEnd(index);
+      this.grabEnd(pointer);
       this.station.pressEnd(index);
       this.stopSpray(pointer);
       pointer.source = null;
@@ -181,11 +217,31 @@ export class XRWalk {
     events.addEventListener('selectend', () => {
       this.station.pressEnd(index);
       this.stopSpray(pointer);
-      if (pointer.source?.hand) this.station.grabEnd(index);
+      if (pointer.source?.hand) this.grabEnd(pointer);
     });
-    events.addEventListener('squeezestart', () => this.station.grabStart(index, this.grabPosition(pointer)));
-    events.addEventListener('squeezeend', () => this.station.grabEnd(index));
+    events.addEventListener('squeezestart', () => this.grabStart(pointer));
+    events.addEventListener('squeezeend', () => this.grabEnd(pointer));
   }
+
+  private grabStart(pointer: Pointer) {
+    if (!this.station.grabStart(pointer.index, this.grabPosition(pointer))) return false;
+    this.grabbing.add(pointer.index);
+    haptic(pointer.source, 0.3, 20);
+    return true;
+  }
+
+  private grabEnd(pointer: Pointer) {
+    this.station.grabEnd(pointer.index);
+    if (this.grabbing.delete(pointer.index)) haptic(pointer.source, 0.15, 10);
+  }
+
+  /** Panels and station parts report here; the sound is placed at `at` when given, and felt in the pressing hand. */
+  private feedback: FeedbackSink = (cue, at) => {
+    this.sound.play(cue, { at });
+    const source = this.pressing?.source;
+    if (cue === 'tick') haptic(source, 0.1, 8);
+    else if (cue !== 'disabled') haptic(source);
+  };
 
   /** The right controller sprays while it holds the can; every trigger presses panels first. */
   private sprays(pointer: Pointer) {
@@ -194,22 +250,28 @@ export class XRWalk {
 
   private press(pointer: Pointer) {
     const ray = pointerRay(pointer, new THREE.Ray());
-    if (pointer.source?.hand && this.station.grabStart(pointer.index, this.grabPosition(pointer))) return;
+    if (pointer.source?.hand && this.grabStart(pointer)) return;
+    this.pressing = pointer;
     if (this.controllerPanel.press(ray) || this.station.press(ray, pointer.index)) return;
     if (this.sprays(pointer)) this.startSpray(pointer);
   }
 
   private onPanelButton(button: PanelButton) {
     if (button === 'pointer' || button === 'spray') {
+      this.feedback(button === this.tool ? 'disabled' : button === 'spray' ? 'toggleOn' : 'toggleOff');
       this.tool = button;
       this.controllerPanel.setTool(button);
     } else if (button === 'highlight-on' || button === 'highlight-off') {
-      this.highlight = button === 'highlight-on';
+      const on = button === 'highlight-on';
+      this.feedback(on === this.highlight ? 'disabled' : on ? 'toggleOn' : 'toggleOff');
+      this.highlight = on;
       this.controllerPanel.setHighlight(this.highlight);
       this.onHighlight(this.highlight);
     } else if (button === 'rev-prev' || button === 'rev-next') {
+      this.feedback('press');
       void this.stepRevision(button === 'rev-prev' ? -1 : 1);
     } else {
+      this.feedback('press');
       this.goToChange();
     }
   }
@@ -243,7 +305,6 @@ export class XRWalk {
     const index = versions.findIndex((v) => v.current);
     const target = index < 0 ? undefined : versions[index + delta];
     if (!target) return;
-    pulse(this.pointers.find((p) => handOf(p) === 'left')?.source ?? null);
     this.versions?.select(target);
   }
 
@@ -251,19 +312,24 @@ export class XRWalk {
     if (this.locked) return;
     const now = performance.now();
     const stroke = this.spray.log.beginStroke(now);
-    if (stroke) this.spraying.set(pointer, { stroke, next: now });
-    else this.notify('No colours left: undo or clear some paint', false);
+    if (stroke) this.spraying.set(pointer, { stroke, next: now, loop: this.sound.sprayLoop() });
+    else this.notify('No colours left: undo or clear some paint', 'error');
   }
 
   private stopSpray(pointer: Pointer) {
     const spraying = this.spraying.get(pointer);
     if (!spraying) return;
     this.spraying.delete(pointer);
+    spraying.loop?.stop();
     this.spray.log.endStroke(spraying.stroke, performance.now());
   }
 
   private updateSpray(now: number) {
-    if (this.locked || this.teleport.aiming || this.placement.aiming) return;
+    const paused = this.locked || this.teleport.aiming || this.placement.aiming;
+    for (const [pointer, { loop }] of this.spraying) {
+      loop?.set(paused ? 0 : triggerValue(pointer.source), pointer.ray.getWorldPosition(new THREE.Vector3()));
+    }
+    if (paused) return;
     for (const [pointer, spraying] of this.spraying) {
       if (now < spraying.next) continue;
       spraying.next = now + SPRAY_INTERVAL_MS;
@@ -277,7 +343,7 @@ export class XRWalk {
       const normal = hit.normal.dot(ray.direction) > 0 ? hit.normal.clone().negate() : hit.normal;
       if (!this.spray.add(spraying.stroke, hit.point.toArray() as Vec3, normal.toArray() as Vec3, hit.expressID)) {
         this.stopSpray(pointer);
-        this.notify('Paint is full: undo or clear some', false);
+        this.notify('Paint is full: undo or clear some', 'error');
       }
     }
   }
@@ -298,9 +364,15 @@ export class XRWalk {
     const { progress, tap } = this.paintButton.update(pointer != null, now, blocked);
     if (progress === 1) {
       this.spray.clear();
-      pulse(pointer?.source ?? null);
+      this.sound.play('clear');
+      haptic(pointer?.source);
     }
-    if (tap) this.spray.undo(now);
+    if (tap) {
+      const can = this.pointers.find((p) => this.sprays(p));
+      this.spray.undo(now);
+      this.sound.play('undo', { at: can?.ray.getWorldPosition(new THREE.Vector3()) });
+      haptic(can?.source);
+    }
     return progress < PAINT_RING_DELAY ? 0 : progress;
   }
 
@@ -350,6 +422,10 @@ export class XRWalk {
     this.tool = 'pointer';
     this.controllerPanel.setTool(this.tool);
     this.onHighlight(this.highlight);
+    if (import.meta.env.DEV) this.sound.retune(loadTuning());
+    this.sound.unlock();
+    this.sound.enabled = true;
+    this.hover.reset();
     void this.refreshRevision();
     void this.useBoundedFloor();
   }
@@ -370,7 +446,12 @@ export class XRWalk {
     const { camera, desktop } = this;
     if (this.talking) this.onTalk?.(false);
     this.talking = false;
-    this.spraying.clear();
+    for (const pointer of [...this.spraying.keys()]) this.stopSpray(pointer);
+    this.sound.hold(0);
+    this.sound.duck(false);
+    this.sound.enabled = false;
+    this.grabbing.clear();
+    this.pressing = null;
     this.spray.clear();
     this.fade.reset();
     this.teleport.cancel();
@@ -412,12 +493,29 @@ export class XRWalk {
     this.station.source = source;
   }
 
-  /** The DOM status line can't be seen from inside the headset, so messages go on the wrist. Work finishing is felt in both hands. */
-  notify(text: string, busy: boolean) {
+  /** The DOM status line can't be seen from inside the headset, so messages go on the wrist. Work finishing or failing is heard and felt in both hands. */
+  notify(text: string, kind: NoticeKind) {
     if (!this.presenting) return;
-    if (this.messageBusy && !busy) for (const p of this.pointers) pulse(p.source, 0.6, 80);
+    const busy = kind === 'working' || kind === 'progress';
+    if (kind === 'done' && this.messageBusy) {
+      this.sound.play('done');
+      for (const p of this.pointers) haptic(p.source, 0.6, 80);
+    } else if (kind === 'error') {
+      this.sound.play('error');
+      for (const p of this.pointers) haptic(p.source, 0.5, 60);
+    } else if (kind === 'progress' && !this.panelInView() && this.progressSound.take(performance.now())) {
+      this.sound.play('progress');
+    }
     this.messageBusy = busy;
     this.controllerPanel.setMessage(text, busy);
+  }
+
+  /** Roughly whether the user is looking at the wrist panel. */
+  private panelInView() {
+    if (!this.controllerPanel.worldPosition(panelAt)) return false;
+    this.camera.getWorldPosition(head);
+    this.camera.getWorldDirection(direction);
+    return panelAt.sub(head).normalize().dot(direction) > PANEL_GLANCE;
   }
 
   // --- the latest change ---------------------------------------------------------
@@ -452,7 +550,7 @@ export class XRWalk {
       clear: (from, to) => this.seesChange(from, to, box),
     });
     if (view) void this.travel(view);
-    else this.notify('No place to stand near the change', false);
+    else this.notify('No place to stand near the change', 'error');
   }
 
   // --- moving the user ------------------------------------------------------
@@ -505,6 +603,7 @@ export class XRWalk {
       else if (Math.abs(x) > SNAP_PRESS && !this.snapped.has(pointer)) {
         this.snapped.add(pointer);
         this.turn(-Math.sign(x) * SNAP_ANGLE);
+        haptic(pointer.source, 0.1, 10);
       }
     }
   }
@@ -522,7 +621,10 @@ export class XRWalk {
     const pointer = this.pointers.find((p) => handOf(p) === 'left' && lowerFaceButtonDown(p.source));
     const blocked = this.locked || this.teleport.aiming || this.placement.aiming;
     const progress = this.returnHold.update(pointer != null, now, blocked);
-    if (progress === 1) void this.jump(() => this.returnToSpawn(), pointer);
+    if (progress === 1) {
+      this.sound.play('holdDone');
+      void this.jump(() => this.returnToSpawn(), pointer);
+    }
     return progress;
   }
 
@@ -542,8 +644,9 @@ export class XRWalk {
     await this.fade.to('teleport', 1, 90);
     if (this.presenting) {
       move();
+      this.sound.play('landing');
     }
-    pulse(pointer?.source ?? null);
+    haptic(pointer?.source);
     await this.fade.to('teleport', 0, 120);
     this.locked = false;
   }
@@ -552,6 +655,7 @@ export class XRWalk {
   /** Darkens the view around a swap while in VR; a plain call on desktop. */
   async swap(replace: () => void) {
     if (!this.presenting) return replace();
+    this.sound.play('swap');
     await this.fade.to('reload', 1, 90);
     replace();
     await this.fade.to('reload', 0, 120);
@@ -625,7 +729,9 @@ export class XRWalk {
     const pressing = this.pointers.find((p) => upperFaceButtonDown(p.source));
     if (!!pressing === this.talking) return;
     this.talking = !!pressing;
-    if (pressing) pulse(pressing.source);
+    if (pressing) haptic(pressing.source);
+    this.sound.play(this.talking ? 'micOpen' : 'micClose');
+    this.sound.duck(this.talking);
     this.onTalk?.(this.talking);
   }
 
@@ -708,7 +814,7 @@ export class XRWalk {
     this.updateStickAims();
     this.teleport.update();
     this.placement.update();
-    this.returnRing.set(Math.max(this.updateReturnHold(now), this.updatePaint(now)));
+    this.updateHold(Math.max(this.updateReturnHold(now), this.updatePaint(now)), now);
     this.updateSpray(now);
     this.updateTalk();
     this.updateSnapTurn();
@@ -716,10 +822,10 @@ export class XRWalk {
     // On the left controller; on the right one only if it is the only controller tracked.
     const held = (hand: 'left' | 'right') => this.pointers.find((p) => isController(p) && handOf(p) === hand && p.grip.visible);
     this.controllerPanel.attach((held('left') ?? held('right'))?.grip ?? null);
-    this.controllerPanel.update(rays.map(({ ray }) => ray), this.change?.centre ?? null);
+    const onPanel = this.controllerPanel.update(rays.map(({ ray }) => ray), this.change?.centre ?? null);
     this.camera.getWorldPosition(head);
     this.camera.getWorldDirection(direction);
-    this.station.update({
+    const onStation = this.station.update({
       user: { x: head.x, y: this.walking.floorY, z: head.z, yaw: Math.atan2(-direction.x, -direction.z) },
       grabs: this.pointers.map((p) => ({ id: p.index, position: this.grabPosition(p) })),
       tips: this.pointers.flatMap((p) => {
@@ -728,7 +834,26 @@ export class XRWalk {
       }),
       rays,
     });
+    this.updateHover(rays.map(({ id }, i) => ({ id, key: onPanel[i] ? `panel:${onPanel[i]}` : onStation[i] })), now);
+    this.sound.listen(this.camera);
     this.fade.update(now);
+  }
+
+  /** A pointer moving onto something it can press is felt, never heard. */
+  private updateHover(targets: Array<{ id: number; key: string | null }>, now: number) {
+    for (const pointer of this.pointers) {
+      const key = targets.find((t) => t.id === pointer.index)?.key ?? null;
+      if (this.hover.update(pointer.index, key, now)) haptic(pointer.source, 0.15, 12);
+    }
+  }
+
+  /** The ring, a rising tone, and a vibration that grows in the hand(s) holding the button. */
+  private updateHold(progress: number, now: number) {
+    this.returnRing.set(progress);
+    this.sound.hold(progress < 1 ? progress : 0);
+    if (progress <= 0 || progress >= 1 || now < this.nextHoldPulse) return;
+    this.nextHoldPulse = now + HOLD_PULSE_MS;
+    for (const p of this.pointers) if (lowerFaceButtonDown(p.source)) haptic(p.source, 0.05 + 0.25 * progress, 15);
   }
 }
 
@@ -737,11 +862,8 @@ function isController(pointer: Pointer) {
   return !pointer.source?.hand && pointer.source?.targetRayMode === 'tracked-pointer';
 }
 
-function pulse(source: XRInputSource | null, intensity = 0.4, ms = 40) {
-  const pad = source?.gamepad as (Gamepad & { hapticActuators?: Array<{ pulse?: (v: number, ms: number) => unknown }> }) | undefined;
-  try {
-    pad?.hapticActuators?.[0]?.pulse?.(intensity, ms);
-  } catch {
-    // Haptics are a nicety; devices that refuse them lose nothing.
-  }
+/** How far the trigger is pulled; inputs without an analogue trigger count as fully pressed. */
+function triggerValue(source: XRInputSource | null): number {
+  const value = source?.gamepad?.buttons[0]?.value;
+  return value == null || value <= 0 ? 1 : Math.min(value, 1);
 }

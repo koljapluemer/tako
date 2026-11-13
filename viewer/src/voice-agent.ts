@@ -1,4 +1,5 @@
 // Hold-to-talk from the headset to the VR agent running on the PC (`just vr-agent`).
+import { noticeKind, type NoticeKind } from './xr/feedback';
 
 type AgentMessage = { type: 'status' | 'reply' | 'error'; text: string };
 
@@ -14,7 +15,7 @@ export class VoiceAgent {
   private startedAt = 0;
 
   constructor(
-    private show: (text: string, busy: boolean) => void,
+    private show: (text: string, kind: NoticeKind) => void,
     /** What the user is doing in the scene, for the agent to read alongside the request. */
     private context: () => Promise<string | undefined> = async () => undefined,
   ) {
@@ -28,7 +29,7 @@ export class VoiceAgent {
     socket.addEventListener('open', () => void this.askForMicrophone());
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as AgentMessage;
-      this.show(message.text, message.type === 'status');
+      this.show(message.text, noticeKind(message.type));
     });
     socket.addEventListener('close', () => window.setTimeout(() => this.connect(), 2000));
     socket.addEventListener('error', () => socket.close());
@@ -49,8 +50,8 @@ export class VoiceAgent {
   }
 
   startRecording() {
-    if (!this.connected) return this.show('The VR agent is not running on the PC', false);
-    if (!this.allowed) return this.show('No microphone access', false);
+    if (!this.connected) return this.show('The VR agent is not running on the PC', 'error');
+    if (!this.allowed) return this.show('No microphone access', 'error');
     this.held = true;
     void this.record();
   }
@@ -65,26 +66,26 @@ export class VoiceAgent {
     recorder.onstop = async () => {
       stream.getTracks().forEach((track) => track.stop());
       const recordMs = Math.round(performance.now() - this.startedAt);
-      if (recordMs < MIN_RECORDING_MS) return this.show('Hold the button while you speak', false);
+      if (recordMs < MIN_RECORDING_MS) return this.show('Hold the button while you speak', 'info');
       void this.transcribeAndSend(new Blob(chunks, { type: recorder.mimeType }), recordMs);
     };
     this.recorder = recorder;
     this.startedAt = performance.now();
     recorder.start();
-    this.show('Listening… release to send', true);
+    this.show('Listening… release to send', 'working');
   }
 
   private async transcribeAndSend(audio: Blob, recordMs: number) {
-    this.show('Transcribing…', true);
+    this.show('Transcribing…', 'working');
     const started = performance.now();
     try {
       const response = await fetch('/api/transcribe', { method: 'POST', body: audio, headers: { 'content-type': audio.type } });
-      if (!response.ok) return this.show(response.status === 429 ? 'Voice limit reached, try later' : 'Speech service failed', false);
+      if (!response.ok) return this.show(response.status === 429 ? 'Voice limit reached, try later' : 'Speech service failed', 'error');
       const { text } = await response.json() as { text: string };
       if (text.trim()) void this.sendText(text.trim(), { record_ms: recordMs, transcribe_ms: Math.round(performance.now() - started) });
-      else this.show('I did not catch that', false);
+      else this.show('I did not catch that', 'error');
     } catch {
-      this.show('Speech service unreachable', false);
+      this.show('Speech service unreachable', 'error');
     }
   }
 

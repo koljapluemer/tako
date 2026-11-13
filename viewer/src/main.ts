@@ -217,7 +217,7 @@ async function openSample(sample: Sample) {
   if (openingSample) return;
   openingSample = true;
   picker.disabled = true;
-  xr.notify(`Loading ${sample.name}…`, true);
+  xr.notify(`Loading ${sample.name}…`, 'working');
   const opened = (async () => {
     const stored = (await listProjects()).some((p) => p.id === sample.file);
     if (stored) return openProject(sample.file, [], setStatus);
@@ -226,7 +226,7 @@ async function openSample(sample: Sample) {
   show(opened, null, true);
   const failed = await opened.then(() => false, () => true);
   await loading;
-  if (failed) xr.notify(`Could not load ${sample.name}`, false);
+  if (failed) xr.notify(`Could not load ${sample.name}`, 'error');
   await refreshPicker();
   picker.disabled = false;
   openingSample = false;
@@ -267,12 +267,12 @@ let jumping = false;
 async function performJump(target: number) {
   if (!activeDocument) return;
   const cached = modelCache.get(activeDocument.id, target);
-  if (!cached) xr.notify('Loading revision…', true);
+  if (!cached) xr.notify('Loading revision…', 'working');
   const opened = jumpToRevision(activeDocument, target, cached, setStatus);
   show(opened, null, false);
   const failed = await opened.then(() => false, () => true);
   await loading;
-  if (failed) xr.notify('Could not load that revision', false);
+  if (failed) xr.notify('Could not load that revision', 'error');
 }
 
 async function requestRevision(target: number) {
@@ -341,9 +341,9 @@ agentWindow.__takoAgentDisconnect = () => {
 
 xr.pickAt = (ray) => (current ? pickAlong(ray, current) : null);
 
-const voice = new VoiceAgent((text, busy) => {
+const voice = new VoiceAgent((text, kind) => {
   setStatus(text);
-  xr.notify(text, busy);
+  xr.notify(text, kind);
 }, async () => {
   const pose = xr.interactionPose();
   if (!pose) return undefined;

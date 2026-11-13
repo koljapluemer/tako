@@ -5,6 +5,7 @@ import type { NavPoint } from '../nav/points';
 import type { Sample } from '../samples';
 import type { VersionSource } from '../versions';
 import { Arc, CARD_H } from './arc';
+import type { FeedbackSink } from './feedback';
 import { MiniControls, PANEL_H, type LipPlacement } from './mini-controls';
 import { MiniModel, type MiniInput } from './mini-model';
 import { MAX_HEIGHT } from './mini-view';
@@ -78,6 +79,15 @@ export class Station {
 
   set onPin(run: (point: NavPoint) => void) {
     this.mini.onCommit = run;
+  }
+
+  set onFeedback(sink: FeedbackSink) {
+    this.controls.onFeedback = sink;
+    this.arc.onFeedback = sink;
+  }
+
+  set onTip(run: (id: number, event: 'hover' | 'armed') => void) {
+    this.mini.onTip = run;
   }
 
   set source(source: VersionSource) {
@@ -169,12 +179,14 @@ export class Station {
     this.controls.release(id);
   }
 
-  update({ rays, ...input }: Omit<MiniInput, 'picks'> & { rays: Array<{ id: number; ray: THREE.Ray }> }) {
-    if (!this.opened) return;
+  /** Returns what each ray is on, for hover feedback: the lip first, then the cards, then the pins. */
+  update({ rays, ...input }: Omit<MiniInput, 'picks'> & { rays: Array<{ id: number; ray: THREE.Ray }> }): Array<string | null> {
+    if (!this.opened) return rays.map(() => null);
     this.fitTable();
     const picks = rays.map(({ ray }) => this.limited(ray));
-    this.controls.update(rays, picks);
-    this.arc.update(picks);
-    this.mini.update({ ...input, picks });
+    const lip = this.controls.update(rays, picks);
+    const cards = this.arc.update(picks);
+    const pins = this.mini.update({ ...input, picks });
+    return rays.map((_, i) => lip[i] ?? cards[i] ?? pins[i]);
   }
 }

@@ -64,6 +64,8 @@ export class MiniModel {
   private opened = false;
 
   onCommit: (point: NavPoint) => void = () => {};
+  /** A fingertip (by hand id) touched a pin, or pressed one in far enough to arm it. */
+  onTip: (id: number, event: 'hover' | 'armed') => void = () => {};
 
   constructor(scene: THREE.Scene) {
     this.marker = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.035, 12).rotateX(-Math.PI / 2), material(COLOR.you, 1));
@@ -272,13 +274,15 @@ export class MiniModel {
     this.onCommit(pin.point);
   }
 
-  update({ user, grabs, tips, picks }: MiniInput) {
-    if (!this.opened || !this.built) return;
+  /** Returns the pin each pick points at, as `pin:<index>`, or null. */
+  update({ user, grabs, tips, picks }: MiniInput): Array<string | null> {
+    if (!this.opened || !this.built) return picks.map(() => null);
     this.applyGrabs(grabs);
     this.root.updateMatrixWorld(true);
     this.refreshPins();
     this.updateMarker(user);
-    if (!this.updatePins(tips)) this.updateHover(picks);
+    if (this.updatePins(tips)) return picks.map(() => null);
+    return this.updateHover(picks);
   }
 
   private applyGrabs(hands: Hand[]) {
@@ -334,6 +338,7 @@ export class MiniModel {
         const height = tip.position.y - (point.y + PIN_TOP);
         const lateral = Math.hypot(tip.position.x - point.x, tip.position.z - point.z);
         const event = press.update(height, lateral);
+        if (event === 'hover' || event === 'armed') this.onTip(tip.id, event);
         if (event === 'commit') {
           this.commit(pin);
           return true;
@@ -345,16 +350,20 @@ export class MiniModel {
     return touched != null;
   }
 
-  private updateHover(picks: LimitedRay[]) {
+  private updateHover(picks: LimitedRay[]): Array<string | null> {
     let best: Pin | null = null;
-    for (const { ray, far } of picks) {
+    const keys = picks.map(({ ray, far }) => {
+      let first: Pin | null = null;
       for (const pin of this.shown) {
         pin.mesh.getWorldPosition(point);
         const along = point.sub(ray.origin).dot(ray.direction);
-        if (along > 0 && along <= far && Math.sqrt(Math.max(point.lengthSq() - along * along, 0)) / along < RAY_SNAP) best ??= pin;
+        if (along > 0 && along <= far && Math.sqrt(Math.max(point.lengthSq() - along * along, 0)) / along < RAY_SNAP) first ??= pin;
       }
-    }
+      best ??= first;
+      return first ? `pin:${this.pins.indexOf(first)}` : null;
+    });
     this.highlight(best);
+    return keys;
   }
 
   private highlighted: Pin | null = null;
