@@ -44,7 +44,6 @@ window.addEventListener('resize', () => {
 
 const xr = new XRWalk(renderer, scene, camera);
 xr.onHighlight = (on) => changes.setEnabled(on);
-xr.onChangeSeen = () => changes.release(SEEN_HIGHLIGHT_MS);
 xr.onExit = (reframe) => {
   if (reframe && current) frameObject(current.group);
 };
@@ -71,10 +70,6 @@ function frameObject(obj: THREE.Object3D) {
 type ModelChange = { rev: number; summary: string; changed: number[] } | null;
 
 const changes = new ChangeHighlight();
-/** How long an edit stays highlighted on the desktop; in VR it stays until the user has seen it. */
-const DESKTOP_HIGHLIGHT_MS = 6000;
-/** In VR, how long after the change comes into view. */
-const SEEN_HIGHLIGHT_MS = 3000;
 let current: LoadedModel | null = null;
 let activeDocument: DocumentSummary | null = null;
 let loading = Promise.resolve();
@@ -126,7 +121,7 @@ function show(opened: Promise<OpenedDocument>, change: ModelChange, refocus: boo
       if (refocus) selectionMarker.visible = false;
       if (refocus && !xr.presenting) frameObject(model.group);
       if (change && change.changed.length) {
-        const box = changes.show(model.group, change.changed, xr.presenting ? null : DESKTOP_HIGHLIGHT_MS);
+        const box = changes.show(model.group, change.changed);
         if (box) xr.setChange(box);
       } else if (!change) {
         changes.clear();

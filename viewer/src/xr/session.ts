@@ -58,10 +58,6 @@ const SPRAY_JITTER = Math.tan(THREE.MathUtils.degToRad(1.5));
 /** Taps shouldn't flash the ring. */
 const PAINT_RING_DELAY = 150 / RETURN_HOLD_MS;
 const NO_COLOUR_TIP = 0x808080;
-/** A change counts as seen once it has been in view, unblocked and this close, for this long. */
-const SEEN_ANGLE = Math.cos(THREE.MathUtils.degToRad(30));
-const SEEN_DISTANCE = 8;
-const SEEN_MS = 1000;
 /** Lets a ray graze the changed element's own surface before its bounds start. */
 const SIGHT_SLACK = 0.1;
 
@@ -101,10 +97,8 @@ export class XRWalk {
   private highlight = true;
   /** Called when the change highlight is switched on or off. */
   onHighlight: (on: boolean) => void = () => {};
-  /** The latest edit's bounds, until the user has had a look at it. */
-  private change: { box: THREE.Box3; centre: THREE.Vector3; inViewSince: number | null } | null = null;
-  /** Called once the latest change has been seen. */
-  onChangeSeen: () => void = () => {};
+  /** The latest edit's bounds, until the next edit or model switch. */
+  private change: { box: THREE.Box3; centre: THREE.Vector3 } | null = null;
   private messageBusy = false;
   /** What a ray hits in the current model. */
   pickAt: ((ray: THREE.Ray) => { point: THREE.Vector3; normal: THREE.Vector3; expressID: number } | null) | null = null;
@@ -351,8 +345,6 @@ export class XRWalk {
     this.messageBusy = false;
     this.station.close();
     this.controllerPanel.attach(null);
-    // Unseen from the headset, but the desktop shouldn't keep it highlighted forever.
-    if (this.change) this.onChangeSeen();
     this.clearChange();
     // The setting is the headset's; the desktop always highlights.
     this.onHighlight(true);
@@ -392,7 +384,7 @@ export class XRWalk {
   /** Points the user to what the latest edit changed, until they have seen it. */
   setChange(box: THREE.Box3) {
     if (!this.presenting) return;
-    this.change = { box: box.clone(), centre: box.getCenter(new THREE.Vector3()), inViewSince: null };
+    this.change = { box: box.clone(), centre: box.getCenter(new THREE.Vector3()) };
   }
 
   clearChange() {
@@ -406,24 +398,6 @@ export class XRWalk {
     const reach = entry ? entry.distanceTo(from) : from.distanceTo(to);
     const hit = this.model?.collision.raycast(ray, reach);
     return !hit || hit.distance >= reach - SIGHT_SLACK;
-  }
-
-  private updateChange(now: number) {
-    const { change } = this;
-    if (!change || this.locked) return;
-    this.camera.getWorldPosition(head);
-    this.camera.getWorldDirection(direction);
-    const toChange = change.centre.clone().sub(head);
-    const distance = toChange.length();
-    const inView = distance < SEEN_DISTANCE
-      && (change.box.containsPoint(head) || toChange.normalize().dot(direction) > SEEN_ANGLE)
-      && this.seesChange(head, change.centre, change.box);
-    if (!inView) change.inViewSince = null;
-    else if (change.inViewSince == null) change.inViewSince = now;
-    else if (now - change.inViewSince > SEEN_MS) {
-      this.clearChange();
-      this.onChangeSeen();
-    }
   }
 
   private goToChange() {
@@ -697,7 +671,6 @@ export class XRWalk {
     this.updateSpray(now);
     this.updateTalk();
     this.updateSnapTurn();
-    this.updateChange(now);
     const rays = this.pointers.filter((p) => p.source && p.ray.visible && !this.spraying.has(p)).map((p) => ({ id: p.index, ray: pointerRay(p, new THREE.Ray()) }));
     // On the left controller; on the right one only if it is the only controller tracked.
     const held = (hand: 'left' | 'right') => this.pointers.find((p) => isController(p) && handOf(p) === hand && p.grip.visible);

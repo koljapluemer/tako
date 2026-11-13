@@ -6,22 +6,20 @@ export const highlightMaterial = new THREE.MeshLambertMaterial({
 });
 
 /**
- * The elements the latest edit touched, shown with a pulsing material until released.
- * Turning it off keeps track of the change (for the way back to it) but shows the normal materials.
+ * The elements the latest edit touched, shown with a pulsing material until the next edit replaces them.
+ * Only the user turns it off, and turning it off keeps track of the change so it can be turned back on.
  */
 export class ChangeHighlight {
   private model: THREE.Group | null = null;
   private ids = new Set<number>();
   private hits: THREE.Mesh[] = [];
   private enabled = true;
-  private releaseAt = Infinity;
 
-  /** Returns the changed elements' bounds, or null when none of them has geometry. `releaseMs` null holds until `release`. */
-  show(model: THREE.Group, ids: number[], releaseMs: number | null): THREE.Box3 | null {
+  /** Returns the changed elements' bounds, or null when none of them has geometry. */
+  show(model: THREE.Group, ids: number[]): THREE.Box3 | null {
     this.clear();
     this.model = model;
     this.ids = new Set(ids);
-    this.releaseAt = releaseMs == null ? Infinity : performance.now() + releaseMs;
     const box = new THREE.Box3();
     model.updateMatrixWorld(true);
     this.each((mesh) => box.expandByObject(mesh));
@@ -35,11 +33,6 @@ export class ChangeHighlight {
     else this.restore();
   }
 
-  /** Ends the highlight after `ms`, unless it was due to end sooner. */
-  release(ms: number) {
-    this.releaseAt = Math.min(this.releaseAt, performance.now() + ms);
-  }
-
   clear() {
     this.restore();
     this.model = null;
@@ -49,7 +42,7 @@ export class ChangeHighlight {
   /** Call every frame. `current` is the model on screen; a highlight on any other is dropped. */
   update(now: number, current: THREE.Group | null) {
     if (!this.model) return;
-    if (now > this.releaseAt || this.model !== current) return this.clear();
+    if (this.model !== current) return this.clear();
     highlightMaterial.emissiveIntensity = 0.6 + 0.4 * Math.sin(now / 150);
   }
 
